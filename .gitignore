@@ -1,0 +1,47 @@
+# =================================================================
+# Backend (Python/FastAPI)
+# =================================================================
+# Environment variables - Contains secrets!
+/backend/.env
+
+# Virtual environment folder
+/backend/venv/
+
+# Google Cloud credentials - Contains secrets!
+/backend/google-credentials.json
+
+# Python cache
+/backend/__pycache__/
+/backend/*.pyc
+
+# =================================================================
+# Frontend (Next.js)
+# =================================================================
+# Environment variables - Contains secrets!
+/frontend/.env
+/frontend/.env.local
+/frontend/.env.development.local
+/frontend/.env.test.local
+/frontend/.env.production.local
+
+# Dependencies
+/frontend/node_modules/
+
+# Next.js build output and cache
+/frontend/.next/
+/frontend/.vercel/
+
+# Next.js generated TypeScript declaration file
+/frontend/next-env.d.ts
+
+# =================================================================
+# Database (Prisma)
+# =================================================================
+# Local database files - These should not be version controlled
+/frontend/prisma/dev.db
+/frontend/prisma/*.sqlite
+
+# NOTE: Migration files are often committed to version control to keep
+# the database schema history consistent across all environments.
+# Uncomment the line below if you are sure you want to ignore them.
+# /frontend/prisma/migrations/
