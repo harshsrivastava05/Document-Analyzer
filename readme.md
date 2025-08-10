@@ -111,8 +111,9 @@ graph TB
 ### Installation
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/docanalyzer-ai
-cd docanalyzer-ai
+git clone https://github.com/yourusername/document-analyzer.git
+
+cd document-analyzer
 
 # Setup frontend
 cd frontend
@@ -138,7 +139,7 @@ cd backend && uvicorn main:app --reload
 cd frontend && npm run dev
 ```
 
-📖 **For detailed setup instructions, see [Installation Guide](installation-guide.md)**
+📖 **For detailed setup instructions, see [Installation Guide](https://github.com/harshsrivastava05/Document-Analyzer/blob/main/installation-guide.md)**
 
 ## 📁 Project Structure
 
@@ -315,8 +316,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <div align="center">
 
-**[🚀 Get Started](installation-guide.md)** | **[📖 Documentation](https://docs.docanalyzer.ai)** | **[🌟 Star on GitHub](https://github.com/harshsrivastava05/Document-Analyzer)**
+**[🚀 Get Started](https://github.com/harshsrivastava05/Document-Analyzer/blob/main/installation-guide.md)** | **[🌟 Star on GitHub](https://github.com/harshsrivastava05/Document-Analyzer)**
 
-Made with ❤️ by [Your Name](https://github.com/harshsrivastava05)
+Made with ❤️ by [Harsh Srivastava](https://github.com/harshsrivastava05)
 
 </div>
