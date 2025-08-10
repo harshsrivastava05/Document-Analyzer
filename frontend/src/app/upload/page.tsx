@@ -1,14 +1,15 @@
-import { getServerSession } from "next-auth";
-import authOptions from "@/lib/auth";
+import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import UploadClient from "./upload.client";
 
 export const dynamic = "force-dynamic";
 
 export default async function UploadPage() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
+  
   if (!session) {
-    // Route protection also handled by middleware, but double guard
-    return null;
+    redirect("/login");
   }
+  
   return <UploadClient />;
 }

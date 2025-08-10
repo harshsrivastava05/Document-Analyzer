@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { proxy } from "@/lib/api";
-import { getServerSession } from "next-auth";
-import authOptions from "@/lib/auth";
+import { auth } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session)
+  const session = await auth();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const form = await req.formData();
   form.append("userId", session.user.id);

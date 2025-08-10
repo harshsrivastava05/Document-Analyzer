@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession, signIn, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
+import { signIn, signOut } from "@/lib/auth-client";
 import Button from "./ui/Button";
 
 export default function Navbar() {
   const { data: session, status } = useSession();
   const pathname = usePathname();
 
-  // Don't render auth buttons while loading
   if (status === "loading") {
     return (
       <header className="sticky top-0 z-50 border-b border-white/10 bg-[#0B0B10]/70 backdrop-blur">
@@ -33,7 +33,7 @@ export default function Navbar() {
           <div>
             {pathname !== "/login" && (
               <Button
-                onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+                onClick={() => signIn("google", { redirectTo: "/dashboard" })}
               >
                 Login
               </Button>
@@ -58,7 +58,7 @@ export default function Navbar() {
             </Link>
             <Button
               variant="ghost"
-              onClick={() => signOut({ callbackUrl: "/" })}
+              onClick={() => signOut({ redirect: true, callbackUrl: "/" })}
             >
               Sign out
             </Button>
