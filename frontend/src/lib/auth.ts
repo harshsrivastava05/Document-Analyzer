@@ -13,8 +13,8 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     }),
   ],
   session: {
-    strategy: "database", // Use database sessions with adapter
-    maxAge: 30 * 24 * 60 * 60, // 30 days
+    strategy: "database", 
+    maxAge: 30 * 24 * 60 * 60, 
   },
   pages: {
     signIn: "/login",
@@ -22,7 +22,6 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
   },
   callbacks: {
     async session({ session, user }) {
-      // With database strategy, user comes from the database
       if (user && session.user) {
         session.user.id = user.id;
       }
