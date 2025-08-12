@@ -1,7 +1,7 @@
 import { handlers } from "@/lib/auth"
 export const { GET, POST } = handlers
 
-// Step 4: frontend/src/middleware.ts
+// frontend/src/middleware.ts - Fix the import error
 import { auth } from "@/lib/auth"
 import { NextResponse } from "next/server"
 
@@ -11,7 +11,7 @@ interface AuthRequest {
     url: string
 }
 
-type AuthMiddleware = (req: AuthRequest) => NextResponse | Promise<NextResponse>
+type AuthMiddleware = (req: AuthRequest) => NextResponse
 
 const authMiddleware: AuthMiddleware = (req) => {
     const { pathname } = req.nextUrl
