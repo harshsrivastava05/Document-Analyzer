@@ -9,6 +9,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     Google({
       clientId: process.env.AUTH_GOOGLE_ID!,
       clientSecret: process.env.AUTH_GOOGLE_SECRET!,
+      allowDangerousEmailAccountLinking: true, // Allow account linking
     }),
   ],
   session: {
@@ -19,6 +20,10 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     signIn: "/login",
   },
   callbacks: {
+    async signIn({ user, account, profile, email, credentials }) {
+      // Allow sign in
+      return true
+    },
     async jwt({ token, account, user }) {
       if (account && user) {
         token.userId = user.id;
@@ -30,6 +35,11 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         session.user.id = token.userId as string;
       }
       return session;
+    },
+  },
+  events: {
+    async linkAccount({ user, account, profile }) {
+      console.log("Account linked:", { userId: user.id, provider: account.provider })
     },
   },
   debug: process.env.NODE_ENV === "development",
