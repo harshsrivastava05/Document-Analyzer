@@ -4,27 +4,27 @@ export default auth((req) => {
   const { nextUrl } = req;
   const isLoggedIn = !!req.auth;
 
-  // Define public routes that don't require authentication
-  const publicRoutes = ["/", "/login"];
-  const isPublicRoute = publicRoutes.includes(nextUrl.pathname);
+  // Define routes that don't require authentication
+  const publicRoutes = ["/", "/login", "/error"];
+  const apiRoutes = nextUrl.pathname.startsWith("/api");
 
-  // Allow access to public routes
-  if (isPublicRoute) {
+  // Allow public routes and API routes
+  if (publicRoutes.includes(nextUrl.pathname) || apiRoutes) {
     return;
   }
 
   // Redirect to login if not authenticated
   if (!isLoggedIn) {
-    return Response.redirect(new URL("/login", nextUrl));
+    const loginUrl = new URL("/login", nextUrl);
+    return Response.redirect(loginUrl);
   }
 
   // Allow access to protected routes if authenticated
-  return;
 });
 
 export const config = {
-  // Protect all routes except public ones, API routes, and static files
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico).*)",
+    // Match all request paths except static files and images
+    "/((?!_next/static|_next/image|favicon.ico).*)",
   ],
 };

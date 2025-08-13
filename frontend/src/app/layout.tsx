@@ -1,3 +1,4 @@
+// frontend/src/app/layout.tsx
 import "./globals.css";
 import { Inter } from "next/font/google";
 import Navbar from "@/components/Navbar";
@@ -19,7 +20,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} bg-[#0B0B10] text-gray-100}`}>
+      <body className={`${inter.className} bg-[#0B0B10] text-gray-100`} suppressHydrationWarning>
         <Providers>
           <Navbar />
           <main className="min-h-screen">{children}</main>

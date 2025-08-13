@@ -1,3 +1,4 @@
+// frontend/src/components/Navbar.tsx
 "use client";
 
 import Link from "next/link";
@@ -5,10 +6,30 @@ import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { signIn, signOut } from "@/lib/auth-client";
 import Button from "./ui/Button";
+import { useEffect, useState } from "react";
 
 export default function Navbar() {
   const { data: session, status } = useSession();
   const pathname = usePathname();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Show a loading state until mounted to prevent hydration mismatch
+  if (!mounted) {
+    return (
+      <header className="sticky top-0 z-50 border-b border-white/10 bg-[#0B0B10]/70 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+          <Link href="/" className="font-semibold text-white tracking-wide">
+            DocAnalyzer
+          </Link>
+          <div className="text-sm text-gray-400">Loading...</div>
+        </div>
+      </header>
+    );
+  }
 
   if (status === "loading") {
     return (
