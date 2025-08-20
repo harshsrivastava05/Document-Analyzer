@@ -12,6 +12,8 @@ export async function GET() {
       timestamp: new Date().toISOString(),
       backend_url: process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000"
     });
+
+    
   } catch (error) {
     return NextResponse.json({
       frontend: "healthy",
