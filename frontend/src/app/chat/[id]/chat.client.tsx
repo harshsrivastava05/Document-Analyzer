@@ -68,3 +68,8 @@ export default function ChatClient({ docId }: { docId: string }) {
     </div>
   );
 }
+
+
+
+
+
