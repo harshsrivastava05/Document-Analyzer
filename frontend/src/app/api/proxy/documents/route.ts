@@ -10,11 +10,11 @@ export async function GET() {
     }
 
     const res = await proxy(`/documents?userId=${session.user.id}`);
-
+    
     if (!res.ok) {
-      console.error("Backend returned error:", res.status, res.statusText);
+      console.error('Backend returned error:', res.status, res.statusText);
       return NextResponse.json(
-        { error: "Backend service unavailable", documents: [] },
+        { error: "Backend service unavailable", documents: [] }, 
         { status: 503 }
       );
     }
@@ -22,9 +22,9 @@ export async function GET() {
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
-    console.error("Documents API error:", error);
+    console.error('Documents API error:', error);
     return NextResponse.json(
-      { error: "Failed to fetch documents", documents: [] },
+      { error: "Failed to fetch documents", documents: [] }, 
       { status: 503 }
     );
   }

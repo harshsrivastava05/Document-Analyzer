@@ -20,7 +20,7 @@ export default function UploadClient() {
         body: form,
       });
 
-      if (!res.ok) throw new Error("Upload failed");
+      if (!res.ok) throw new Error("Upload failed" + res.statusText);
       const data = await res.json();
       setStatus("Uploaded and queued for analysis.");
     } catch (e: any) {
