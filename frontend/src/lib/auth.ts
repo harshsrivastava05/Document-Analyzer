@@ -1,5 +1,6 @@
 import NextAuth from "next-auth"
 import Google from "next-auth/providers/google"
+import { prisma } from "@/lib/prisma"
 
 export const { auth, handlers, signIn, signOut } = NextAuth({
   providers: [
@@ -10,18 +11,21 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     }),
   ],
   session: {
-    strategy: "jwt", // Changed from "database" to "jwt"
+    strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60, 
   },
   pages: {
     signIn: "/login",
-    error: "/error", // Fixed path
+    error: "/error",
   },
   callbacks: {
     async jwt({ token, account, user }) {
       // Persist the OAuth access_token and user id to the token right after signin
       if (account && user) {
         token.userId = user.id;
+        token.email = user.email;
+        token.name = user.name;
+        token.image = user.image;
       }
       return token;
     },
@@ -30,27 +34,39 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
       if (token.userId) {
         session.user.id = token.userId as string;
       }
+      if (token.email) {
+        session.user.email = token.email as string;
+      }
+      if (token.name) {
+        session.user.name = token.name as string;
+      }
+      if (token.image) {
+        session.user.image = token.image as string;
+      }
       return session;
     },
   },
   events: {
     async signIn({ user, account }) {
       if (account?.provider === "google" && user.email) {
-        // Handle user creation/update in your database here
-        // You'll need to create an API route for this
         try {
-          await fetch(`${process.env.NEXTAUTH_URL}/api/auth/sync-user`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              id: user.id,
+          // Ensure user exists in database
+          await prisma.user.upsert({
+            where: { email: user.email },
+            update: {
+              name: user.name,
+              image: user.image,
+            },
+            create: {
+              id: user.id || `user_${Date.now()}`, // Fallback ID if none provided
               email: user.email,
               name: user.name,
               image: user.image,
-            }),
+            },
           });
+          console.log(`✅ User synced to database: ${user.email}`);
         } catch (error) {
-          console.error("Failed to sync user:", error);
+          console.error("❌ Failed to sync user to database:", error);
         }
       }
     },

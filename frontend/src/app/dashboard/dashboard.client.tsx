@@ -7,11 +7,30 @@ import { useState } from "react";
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function DashboardClient() {
-  const { data, error, isLoading } = useSWR("/api/proxy/documents", fetcher);
+  const { data, error, isLoading } = useSWR("/api/proxy/documents", fetcher, {
+    onError: () => {
+      console.log('Backend failed, trying direct database access...');
+    },
+    fallbackData: null,
+  });
+
+  // Fallback hook for when backend is down
+  const { data: fallbackData } = useSWR(
+    error ? "/api/documents" : null, 
+    fetcher,
+    { 
+      revalidateOnFocus: false,
+      dedupingInterval: 10000,
+    }
+  );
+
+  // Use fallback data if main request failed
+  const finalData = data || fallbackData;
   const [downloading, setDownloading] = useState<string | null>(null);
 
-  const documents = data?.documents || [];
+  const documents = finalData?.documents || [];
   const hasDocuments = documents.length > 0;
+  const isBackendDown = error && fallbackData;
 
   const handleDownload = async (documentId: string, title: string) => {
     try {
@@ -49,7 +68,14 @@ export default function DashboardClient() {
 
   return (
     <div className="max-w-6xl mx-auto py-12 px-6">
-      <h2 className="text-3xl font-bold mb-6">Your documents</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-3xl font-bold">Your documents</h2>
+        {isBackendDown && (
+          <div className="text-sm text-orange-400 bg-orange-400/10 px-3 py-1 rounded-lg">
+            ⚠️ Backend offline - limited functionality
+          </div>
+        )}
+      </div>
 
       {isLoading && <p className="text-gray-400">Loading...</p>}
       {error && <p className="text-red-400">Failed to load documents.</p>}

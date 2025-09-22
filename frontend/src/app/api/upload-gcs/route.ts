@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 export async function POST(req: NextRequest) {
   try {
     const session = await auth();
-    if (!session?.user?.id) {
+    if (!session?.user?.id || !session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -40,6 +40,26 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
+    // Ensure user exists in database before creating document
+    try {
+      await prisma.user.upsert({
+        where: { email: session.user.email },
+        update: {
+          name: session.user.name,
+          image: session.user.image,
+        },
+        create: {
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.name,
+          image: session.user.image,
+        },
+      });
+    } catch (userError) {
+      console.error("Error ensuring user exists:", userError);
+      return NextResponse.json({ error: "Failed to create user record" }, { status: 500 });
+    }
+
     // Convert file to buffer
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
@@ -65,6 +85,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Try to notify backend (optional - don't fail if backend is down)
     try {
       const backendResponse = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/process-document`, {
         method: 'POST',
@@ -78,13 +99,17 @@ export async function POST(req: NextRequest) {
           fileName: file.name,
           mimeType: file.type,
         }),
+        signal: AbortSignal.timeout(5000), // 5 second timeout
       });
 
-      if (!backendResponse.ok) {
-        console.warn('Backend processing failed, but file was uploaded successfully');
+      if (backendResponse.ok) {
+        console.log('✅ Backend processing initiated');
+      } else {
+        console.warn('⚠️ Backend processing failed, but file was uploaded successfully');
       }
     } catch (error) {
-      console.warn('Failed to trigger backend processing:', error);
+      console.warn('⚠️ Failed to notify backend (server may be down):', error);
+      // Don't fail the upload just because backend is down
     }
 
     return NextResponse.json({
@@ -100,6 +125,23 @@ export async function POST(req: NextRequest) {
 
   } catch (error) {
     console.error("Upload error:", error);
+    
+    // Provide more specific error messages
+    if (error instanceof Error) {
+      if (error.message.includes('Foreign key constraint')) {
+        return NextResponse.json(
+          { error: "User authentication error. Please sign out and sign in again." },
+          { status: 400 }
+        );
+      }
+      if (error.message.includes('Google Cloud Storage')) {
+        return NextResponse.json(
+          { error: "File storage error. Please check your Google Cloud Storage configuration." },
+          { status: 500 }
+        );
+      }
+    }
+    
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Upload failed" },
       { status: 500 }
