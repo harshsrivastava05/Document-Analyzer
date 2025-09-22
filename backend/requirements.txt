@@ -8,11 +8,12 @@ google-generativeai
 pinecone 
 cohere 
 google-auth 
+google-cloud-storage
 google-api-python-client 
 sqlalchemy 
 alembic 
 pydantic 
 python-dotenv 
 aiofiles
-jwt
-pydantic
+PyJWT
+bcrypt
