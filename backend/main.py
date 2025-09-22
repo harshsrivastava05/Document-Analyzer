@@ -71,7 +71,6 @@ class DocumentAnalysis(BaseModel):
     sentiment: str
     confidence: float
 
-# ----------------- Auth -----------------
 def get_current_user_from_header(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate JWT token and return user_id"""
     token = credentials.credentials
