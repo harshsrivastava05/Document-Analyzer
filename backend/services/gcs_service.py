@@ -1,58 +1,143 @@
 import os
 import uuid
-from google.cloud import storage
-from google.cloud.exceptions import NotFound
-import tempfile
 from typing import Tuple, Optional
 import json
 from fastapi import HTTPException
 
+# Only import Google Cloud if credentials are available
+try:
+    from google.cloud import storage
+    from google.cloud.exceptions import NotFound
+    GCS_AVAILABLE = True
+except ImportError:
+    GCS_AVAILABLE = False
+    storage = None
+    NotFound = None
+
 class GCSService:
     def __init__(self):
-        self.project_id = os.getenv("GCS_PROJECT_ID")
-        self.bucket_name = os.getenv("GCS_BUCKET_NAME")
+        # Initialize all attributes but don't connect yet
+        self.project_id = None
+        self.bucket_name = None
         self.client = None
         self.bucket = None
-        self._initialize_client()
+        self._initialized = False
+        self._initialization_attempted = False
     
     def _initialize_client(self):
-        """Initialize Google Cloud Storage client"""
-        if not self.project_id or not self.bucket_name:
-            raise ValueError("GCS_PROJECT_ID and GCS_BUCKET_NAME must be set")
+        """Initialize Google Cloud Storage client (lazy initialization)"""
+        # Only try to initialize once
+        if self._initialization_attempted:
+            if not self._initialized:
+                raise HTTPException(status_code=500, detail="GCS initialization failed previously")
+            return
+        
+        self._initialization_attempted = True
+        
+        if not GCS_AVAILABLE:
+            raise HTTPException(
+                status_code=500, 
+                detail="Google Cloud Storage libraries not available. Please install google-cloud-storage."
+            )
+        
+        self.project_id = os.getenv("GCS_PROJECT_ID")
+        self.bucket_name = os.getenv("GCS_BUCKET_NAME")
+        
+        if not self.project_id:
+            raise HTTPException(
+                status_code=500, 
+                detail="GCS_PROJECT_ID environment variable is not set. Please check your .env file."
+            )
+            
+        if not self.bucket_name:
+            raise HTTPException(
+                status_code=500, 
+                detail="GCS_BUCKET_NAME environment variable is not set. Please check your .env file."
+            )
         
         try:
             # Try different authentication methods
             if os.getenv("GCS_SERVICE_ACCOUNT_KEY_BASE64"):
                 # Method 1: Base64 encoded service account key
-                credentials_json = json.loads(
-                    os.getenv("GCS_SERVICE_ACCOUNT_KEY_BASE64").encode().decode('base64')
-                )
-                self.client = storage.Client.from_service_account_info(
-                    credentials_json, project=self.project_id
-                )
-                print("✅ Using base64 encoded service account key for GCS")
+                import base64
+                try:
+                    credentials_json = json.loads(
+                        base64.b64decode(os.getenv("GCS_SERVICE_ACCOUNT_KEY_BASE64")).decode('utf-8')
+                    )
+                    self.client = storage.Client.from_service_account_info(
+                        credentials_json, project=self.project_id
+                    )
+                    print("✅ Using base64 encoded service account key for GCS")
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Failed to decode base64 service account key: {str(e)}"
+                    )
+                    
             elif os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
                 # Method 2: Service account key file
-                self.client = storage.Client.from_service_account_json(
-                    os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), 
-                    project=self.project_id
-                )
-                print("✅ Using service account key file for GCS")
+                credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                if not os.path.exists(credentials_path):
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Service account key file not found: {credentials_path}. Please check the path in your .env file."
+                    )
+                try:
+                    self.client = storage.Client.from_service_account_json(
+                        credentials_path, 
+                        project=self.project_id
+                    )
+                    print("✅ Using service account key file for GCS")
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Failed to load service account key file: {str(e)}"
+                    )
             else:
                 # Method 3: Default credentials (when running on GCP)
-                self.client = storage.Client(project=self.project_id)
-                print("✅ Using default credentials for GCS")
+                try:
+                    self.client = storage.Client(project=self.project_id)
+                    print("✅ Using default credentials for GCS")
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"No valid GCS credentials found. Please set GOOGLE_APPLICATION_CREDENTIALS or GCS_SERVICE_ACCOUNT_KEY_BASE64 in your .env file. Error: {str(e)}"
+                    )
             
-            self.bucket = self.client.bucket(self.bucket_name)
+            # Test the connection
+            try:
+                self.bucket = self.client.bucket(self.bucket_name)
+                # Try to check if bucket exists
+                self.bucket.reload()
+                self._initialized = True
+                print(f"✅ GCS initialized successfully with bucket: {self.bucket_name}")
+                
+            except NotFound:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"GCS bucket '{self.bucket_name}' not found. Please check the bucket name in your .env file."
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to access GCS bucket '{self.bucket_name}': {str(e)}"
+                )
             
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"❌ Failed to initialize GCS client: {e}")
-            raise HTTPException(status_code=500, detail="Failed to initialize Google Cloud Storage")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to initialize Google Cloud Storage: {str(e)}"
+            )
     
     def upload_file(self, file_content: bytes, original_filename: str, 
                    mime_type: str, user_id: str) -> Tuple[str, str]:
         """Upload file to Google Cloud Storage"""
         try:
+            self._initialize_client()  # Initialize on first use
+            
             file_id = str(uuid.uuid4())
             file_extension = original_filename.split('.')[-1] if '.' in original_filename else ''
             filename = f"{file_id}.{file_extension}" if file_extension else file_id
@@ -70,13 +155,17 @@ class GCSService:
             print(f"✅ File uploaded to GCS: {blob_path}")
             return file_id, f"gs://{self.bucket_name}/{blob_path}"
             
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"❌ GCS upload failed: {e}")
-            raise HTTPException(status_code=500, detail="File upload to GCS failed")
+            raise HTTPException(status_code=500, detail=f"File upload to GCS failed: {str(e)}")
     
     def download_file(self, file_id: str, user_id: str) -> bytes:
         """Download file from Google Cloud Storage"""
         try:
+            self._initialize_client()  # Initialize on first use
+            
             # Find the file by scanning the user's directory
             blobs = list(self.client.list_blobs(
                 self.bucket_name, 
@@ -94,15 +183,19 @@ class GCSService:
             
             return target_blob.download_as_bytes()
             
+        except HTTPException:
+            raise
         except NotFound:
             raise HTTPException(status_code=404, detail="File not found")
         except Exception as e:
             print(f"❌ GCS download failed: {e}")
-            raise HTTPException(status_code=500, detail="File download failed")
+            raise HTTPException(status_code=500, detail=f"File download failed: {str(e)}")
     
     def delete_file(self, file_id: str, user_id: str) -> bool:
         """Delete file from Google Cloud Storage"""
         try:
+            self._initialize_client()  # Initialize on first use
+            
             # Find and delete the file
             blobs = list(self.client.list_blobs(
                 self.bucket_name, 
@@ -117,13 +210,17 @@ class GCSService:
             
             return False
             
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"❌ GCS delete failed: {e}")
-            raise HTTPException(status_code=500, detail="File deletion failed")
+            raise HTTPException(status_code=500, detail=f"File deletion failed: {str(e)}")
     
     def get_file_metadata(self, file_id: str, user_id: str) -> dict:
         """Get file metadata from Google Cloud Storage"""
         try:
+            self._initialize_client()  # Initialize on first use
+            
             blobs = list(self.client.list_blobs(
                 self.bucket_name, 
                 prefix=f"documents/{user_id}/"
@@ -142,9 +239,11 @@ class GCSService:
             
             raise HTTPException(status_code=404, detail="File not found")
             
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"❌ GCS metadata failed: {e}")
-            raise HTTPException(status_code=500, detail="Failed to get file metadata")
+            raise HTTPException(status_code=500, detail=f"Failed to get file metadata: {str(e)}")
 
-# Global instance
+# Global instance - safe to create without initialization
 gcs_service = GCSService()

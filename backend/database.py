@@ -24,12 +24,13 @@ def init_db():
         connection = get_db_connection()
         cursor = connection.cursor()
         
-        # Create users table
+        # Create users table (with password_hash field)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id VARCHAR(255) PRIMARY KEY,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 name VARCHAR(255),
+                password_hash VARCHAR(255) NOT NULL,
                 image TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
