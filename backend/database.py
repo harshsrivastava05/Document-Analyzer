@@ -27,7 +27,7 @@ def init_db():
         # Create users table (with password_hash field)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id VARCHAR(255) PRIMARY KEY,
+                id VARCHAR(36) PRIMARY KEY,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 name VARCHAR(255),
                 password_hash VARCHAR(255) NOT NULL,
@@ -41,7 +41,7 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id VARCHAR(36) PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL,
+                user_id VARCHAR(36) NOT NULL,
                 title VARCHAR(500) NOT NULL,
                 gcs_file_id VARCHAR(36) NOT NULL,
                 gcs_file_path TEXT,
@@ -61,7 +61,7 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id VARCHAR(36) PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL,
+                user_id VARCHAR(36) NOT NULL,
                 document_id VARCHAR(36) NOT NULL,
                 role ENUM('user', 'assistant') NOT NULL,
                 content TEXT NOT NULL,

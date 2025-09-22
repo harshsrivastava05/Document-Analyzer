@@ -1,5 +1,5 @@
 import google.generativeai as genai
-from pinecone import Pinecone
+import pinecone
 import cohere
 import os
 import json
@@ -20,12 +20,12 @@ class AIServices:
             genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
             self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
             print("✅ Gemini AI initialized")
-            
+
             # Initialize Pinecone
-            self.pinecone_client = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-            self.pinecone_index = self.pinecone_client.Index(os.getenv("PINECONE_INDEX_NAME"))
+            pinecone.init(api_key=os.getenv("PINECONE_API_KEY"))
+            self.pinecone_index = pinecone.Index(os.getenv("PINECONE_INDEX_NAME"))
             print("✅ Pinecone initialized")
-            
+
             # Initialize Cohere
             self.cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
             print("✅ Cohere initialized")
