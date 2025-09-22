@@ -12,19 +12,29 @@ export default function UploadClient() {
     if (!file) return;
     try {
       setLoading(true);
-      setStatus("Uploading...");
+      setStatus("Uploading to Google Cloud Storage...");
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/proxy/upload", {
+      const res = await fetch("/api/upload-gcs", {
         method: "POST",
         body: form,
       });
 
-      if (!res.ok) throw new Error("Upload failed" + res.statusText);
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Upload failed");
+      }
+      
       const data = await res.json();
-      setStatus("Uploaded and queued for analysis.");
+      setStatus("File uploaded successfully and queued for analysis.");
+      setFile(null); // Reset file input
+      
+      // Reset file input element
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+      
     } catch (e: any) {
-      setStatus(e.message);
+      setStatus(`Error: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -35,8 +45,8 @@ export default function UploadClient() {
       <div className="rounded-2xl border border-white/10 bg-white/5 p-8">
         <h2 className="text-2xl font-semibold mb-4">Upload a document</h2>
         <p className="text-gray-400 mb-6">
-          PDF, DOCX, or TXT. Files are stored in your Google Drive folder and
-          analyzed with Gemini + RAG. Only available when signed in.
+          PDF, DOCX, or TXT files up to 10MB. Files are securely stored in Google Cloud Storage
+          and analyzed with AI for question-answering. Only available when signed in.
         </p>
         <div className="flex items-center gap-4">
           <input
@@ -49,7 +59,18 @@ export default function UploadClient() {
             {loading ? "Uploading..." : "Upload"}
           </Button>
         </div>
-        {status && <p className="mt-4 text-sm text-gray-300">{status}</p>}
+        {status && (
+          <p className={`mt-4 text-sm ${
+            status.includes('Error') ? 'text-red-400' : 'text-gray-300'
+          }`}>
+            {status}
+          </p>
+        )}
+        {file && (
+          <div className="mt-4 text-sm text-gray-400">
+            Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+          </div>
+        )}
       </div>
     </div>
   );

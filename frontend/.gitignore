@@ -44,3 +44,4 @@ prisma/dev.db
 prisma/*.sqlite
 prisma/migrations/
 google-credentials.json
+service-account-key.json

@@ -9,12 +9,27 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const res = await proxy(`/documents?userId=${session.user.id}`);
-    
+    let res;
+    try {
+      res = await proxy(`/documents?userId=${session.user.id}`);
+    } catch (error) {
+      console.error('Backend connection failed:', error);
+      let errorMsg = 'Unknown error';
+      if (error instanceof Error) {
+        errorMsg = error.message;
+      } else if (typeof error === 'string') {
+        errorMsg = error;
+      }
+      return NextResponse.json(
+        { error: `Backend connection failed: ${errorMsg}`, documents: [] },
+        { status: 503 }
+      );
+    }
+
     if (!res.ok) {
       console.error('Backend returned error:', res.status, res.statusText);
       return NextResponse.json(
-        { error: "Backend service unavailable", documents: [] }, 
+        { error: "Backend service unavailable", documents: [] },
         { status: 503 }
       );
     }
@@ -24,7 +39,7 @@ export async function GET() {
   } catch (error) {
     console.error('Documents API error:', error);
     return NextResponse.json(
-      { error: "Failed to fetch documents", documents: [] }, 
+      { error: "Failed to fetch documents", documents: [] },
       { status: 503 }
     );
   }

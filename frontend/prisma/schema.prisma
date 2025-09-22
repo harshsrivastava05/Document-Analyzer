@@ -66,8 +66,10 @@ model Document {
     id          String   @id @default(cuid())
     userId      String   @map("user_id")
     title       String?
-    driveFileId String   @map("drive_file_id") // Google Drive file ID
+    gcsFileId   String   @map("gcs_file_id") // Changed from driveFileId to gcsFileId
+    gcsFilePath String?  @map("gcs_file_path") // Optional: store full GCS path
     mimeType    String?  @map("mime_type")
+    fileSize    Int?     @map("file_size") // Store file size
     summary     String?  @db.Text
     createdAt   DateTime @default(now()) @map("created_at")
     updatedAt   DateTime @updatedAt @map("updated_at")
@@ -76,6 +78,7 @@ model Document {
     qnas QnA[]
 
     @@index([userId])
+    @@index([gcsFileId]) // Index for faster lookups
     @@map("documents")
 }
 
