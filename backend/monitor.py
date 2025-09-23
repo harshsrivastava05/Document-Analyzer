@@ -39,13 +39,15 @@ class HealthChecker:
                 self.results['api'] = {
                     'status': 'unhealthy',
                     'error': f"HTTP {response.status_code}",
-                    'response_time': response.elapsed.total_seconds()
+                    'response_time': response.elapsed.total_seconds(),
+                    'diagnostics': f"Check if backend is running and /health endpoint exists at {self.base_url}/health"
                 }
                 return False
         except requests.exceptions.RequestException as e:
             self.results['api'] = {
                 'status': 'error',
-                'error': str(e)
+                'error': str(e),
+                'diagnostics': f"Could not connect to {self.base_url}/health. Is the backend running? Is the port correct?"
             }
             return False
     
@@ -71,23 +73,35 @@ class HealthChecker:
                     cursor_factory=RealDictCursor,
                     connect_timeout=5
                 )
-            
+
             cursor = connection.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
-            
+
             # Get table counts
-            cursor.execute('SELECT COUNT(*) FROM "users"')
-            user_count = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT COUNT(*) FROM "documents"')
-            doc_count = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT COUNT(*) FROM "qnas"')
-            qna_count = cursor.fetchone()[0]
-            
+            try:
+                cursor.execute('SELECT COUNT(*) FROM users')
+                user_count = cursor.fetchone()[0] # type: ignore
+            except Exception as e:
+                user_count = None
+                self.results['database_users_error'] = str(e)
+
+            try:
+                cursor.execute('SELECT COUNT(*) FROM documents')
+                doc_count = cursor.fetchone()[0] # type: ignore
+            except Exception as e:
+                doc_count = None
+                self.results['database_documents_error'] = str(e)
+
+            try:
+                cursor.execute('SELECT COUNT(*) FROM "qnas"')
+                qna_count = cursor.fetchone()[0] # type: ignore
+            except Exception as e:
+                qna_count = None
+                self.results['database_qnas_error'] = str(e)
+
             connection.close()
-            
+
             self.results['database'] = {
                 'status': 'healthy',
                 'users': user_count,
@@ -95,11 +109,12 @@ class HealthChecker:
                 'qnas': qna_count
             }
             return True
-            
+
         except Exception as e:
             self.results['database'] = {
                 'status': 'error',
-                'error': str(e)
+                'error': str(e),
+                'diagnostics': 'Check database connection parameters, server status, and table existence.'
             }
             return False
     
@@ -109,7 +124,7 @@ class HealthChecker:
         
         # Check Gemini API
         try:
-            import google.generativeai as genai
+            import google.generativeai as genai  # type: ignore
             genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
             # Simple test - this will validate the API key
             model = genai.GenerativeModel('gemini-1.5-flash')
@@ -121,27 +136,31 @@ class HealthChecker:
         
         # Check Pinecone
         try:
-            from pinecone import Pinecone
-            pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+            import pinecone # type: ignore
+            pinecone_api_key = os.getenv("PINECONE_API_KEY")
             index_name = os.getenv("PINECONE_INDEX_NAME")
-            if index_name:
-                index = pc.Index(index_name)
+            if not pinecone_api_key:
+                self.results['pinecone'] = {'status': 'error', 'error': 'API key not configured'}
+                results['pinecone'] = False
+            elif not index_name:
+                self.results['pinecone'] = {'status': 'error', 'error': 'Index name not configured'}
+                results['pinecone'] = False
+            else:
+                pinecone.init(api_key=pinecone_api_key)
+                index = pinecone.Index(index_name)
                 stats = index.describe_index_stats()
                 self.results['pinecone'] = {
                     'status': 'connected',
                     'vector_count': stats.get('total_vector_count', 0)
                 }
                 results['pinecone'] = True
-            else:
-                self.results['pinecone'] = {'status': 'error', 'error': 'Index name not configured'}
-                results['pinecone'] = False
         except Exception as e:
             self.results['pinecone'] = {'status': 'error', 'error': str(e)}
             results['pinecone'] = False
         
         # Check Cohere
         try:
-            import cohere
+            import cohere # type: ignore
             client = cohere.Client(os.getenv("COHERE_API_KEY"))
             # Simple test
             self.results['cohere'] = {'status': 'configured'}
@@ -155,7 +174,7 @@ class HealthChecker:
     def check_gcs(self) -> bool:
         """Check Google Cloud Storage connectivity"""
         try:
-            from google.cloud import storage
+            from google.cloud import storage # type: ignore
             
             project_id = os.getenv("GCS_PROJECT_ID")
             bucket_name = os.getenv("GCS_BUCKET_NAME")
@@ -175,7 +194,7 @@ class HealthChecker:
                 import base64
                 import json
                 credentials_json = json.loads(
-                    base64.b64decode(os.getenv("GCS_SERVICE_ACCOUNT_KEY_BASE64")).decode('utf-8')
+                    base64.b64decode(os.getenv("GCS_SERVICE_ACCOUNT_KEY_BASE64")).decode('utf-8') # type: ignore
                 )
                 client = storage.Client.from_service_account_info(credentials_json, project=project_id)
                 auth_method = "base64_key"

@@ -1,6 +1,6 @@
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from psycopg2 import pool
+from psycopg2.pool import ThreadedConnectionPool
 import os
 from fastapi import HTTPException
 import logging
@@ -49,7 +49,7 @@ def init_connection_pool():
             db_config = parse_database_url(database_url)
             logger.info(f"Using DATABASE_URL for connection to {db_config['host']}")
         
-        connection_pool = psycopg2.pool.ThreadedConnectionPool(
+        connection_pool = ThreadedConnectionPool(
             minconn=1,
             maxconn=20,
             **db_config,
@@ -114,12 +114,13 @@ def get_db_connection_direct():
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
 def drop_existing_tables():
-    """Drop existing tables to avoid conflicts"""
+    """Drop existing tables and all related objects to avoid conflicts"""
     with get_db_connection() as connection:
         try:
-            cursor = connection.cursor()
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
             
-            # Drop tables in reverse order of dependencies
+            # Drop tables first - this will automatically drop all their constraints, indexes, and triggers
+            # Drop in reverse order of dependencies
             tables_to_drop = [
                 'qnas',
                 'documents', 
@@ -130,10 +131,24 @@ def drop_existing_tables():
             ]
             
             for table in tables_to_drop:
-                cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
-                logger.info(f"✅ Dropped table {table} if it existed")
+                try:
+                    cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+                    logger.info(f"✅ Dropped table {table} if it existed")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not drop table {table}: {e}")
+                    # If a table drop fails, rollback and try the next one in a new transaction
+                    connection.rollback()
+            
+            # Drop any remaining functions
+            try:
+                cursor.execute('DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE')
+                logger.info("✅ Dropped function update_updated_at_column if it existed")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not drop function: {e}")
+                connection.rollback()
             
             connection.commit()
+            logger.info("✅ All database objects cleaned up successfully")
             
         except Exception as e:
             logger.error(f"Failed to drop existing tables: {e}")
@@ -143,11 +158,13 @@ def drop_existing_tables():
 def init_db():
     """Initialize database tables matching Prisma schema"""
     try:
-        # First drop existing tables to avoid conflicts
+        # First drop existing tables and all related objects
+        logger.info("🧹 Cleaning up existing database objects...")
         drop_existing_tables()
         
+        logger.info("🏗️ Creating new database schema...")
         with get_db_connection() as connection:
-            cursor = connection.cursor()
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
             
             # Create users table first (no foreign keys)
             cursor.execute('''
@@ -203,7 +220,7 @@ def init_db():
             
             # Create indexes for sessions
             cursor.execute('CREATE INDEX "sessions_user_id_idx" ON "sessions"("user_id")')
-            cursor.execute('CREATE UNIQUE INDEX "sessions_session_token_key" ON "sessions"("session_token")')
+            # Note: The UNIQUE constraint on session_token already creates an index, so we don't need a separate one
             logger.info("✅ Created sessions table")
             
             # Create verification_tokens table
@@ -269,6 +286,7 @@ def init_db():
                 END;
                 $$ language 'plpgsql';
             ''')
+            logger.info("✅ Created update function")
             
             # Create triggers for updated_at
             cursor.execute('''
@@ -280,6 +298,7 @@ def init_db():
                 CREATE TRIGGER update_documents_updated_at BEFORE UPDATE ON "documents"
                 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
             ''')
+            logger.info("✅ Created triggers")
             
             connection.commit()
             logger.info("✅ Database tables initialized successfully with proper foreign key constraints")
@@ -292,7 +311,7 @@ def test_db_connection():
     """Test database connection and basic operations"""
     try:
         with get_db_connection() as connection:
-            cursor = connection.cursor()
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
             
             # Test basic query
             cursor.execute("SELECT 1 as test")
@@ -313,30 +332,49 @@ def get_db_stats():
     """Get database statistics for monitoring"""
     try:
         with get_db_connection() as connection:
-            cursor = connection.cursor()
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
             
             stats = {}
             
             # Get table counts
             tables = ['users', 'documents', 'qnas', 'accounts', 'sessions']
             for table in tables:
-                cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
-                count = cursor.fetchone()[0]
-                stats[f"{table}_count"] = count
+                try:
+                    cursor.execute(f'SELECT COUNT(*) as count FROM "{table}"')
+                    count = cursor.fetchone()['count']
+                    stats[f"{table}_count"] = count
+                except Exception as e:
+                    logger.warning(f"Could not get count for table {table}: {e}")
+                    stats[f"{table}_count"] = 0
             
             # Get database size
-            cursor.execute('''
-                SELECT pg_size_pretty(pg_database_size(current_database())) as db_size
-            ''')
-            
-            result = cursor.fetchone()
-            stats['database_size'] = result['db_size'] if result else '0 bytes'
+            try:
+                cursor.execute('''
+                    SELECT pg_size_pretty(pg_database_size(current_database())) as db_size
+                ''')
+                
+                result = cursor.fetchone()
+                stats['database_size'] = result['db_size'] if result else '0 bytes'
+            except Exception as e:
+                logger.warning(f"Could not get database size: {e}")
+                stats['database_size'] = 'unknown'
             
             return stats
             
     except Exception as e:
         logger.error(f"Failed to get database stats: {e}")
         return {}
+
+def reset_database():
+    """Completely reset the database - useful for development"""
+    try:
+        logger.info("🔄 Resetting database...")
+        init_db()
+        logger.info("✅ Database reset complete")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Database reset failed: {e}")
+        return False
 
 # Initialize connection pool on module import
 if not connection_pool:
