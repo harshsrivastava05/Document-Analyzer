@@ -7,8 +7,14 @@ from models.schemas import UploadResponse, DocumentResponse
 import uuid
 import json
 from datetime import datetime
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+def generate_cuid():
+    """Generate a CUID-like ID to match Prisma"""
+    return str(uuid.uuid4()).replace('-', '')[:25]
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
@@ -16,7 +22,6 @@ async def upload_document(
     user_id: str = Depends(get_current_user)
 ):
     """Upload and process document"""
-    connection = None
     try:
         # Validate file
         allowed_types = [
@@ -49,21 +54,21 @@ async def upload_document(
         analysis = await ai_services.analyze_document(file_content, file.filename or "document")
         
         # Save to database
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        document_id = str(uuid.uuid4())
-        
-        cursor.execute("""
-            INSERT INTO documents 
-            (id, user_id, title, gcs_file_id, gcs_file_path, mime_type, file_size, summary, analysis_data)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            document_id, user_id, file.filename or "Untitled",
-            file_id, gcs_path, file.content_type, len(file_content),
-            analysis.get('summary', ''), json.dumps(analysis)
-        ))
-        
-        connection.commit()
+        with get_db_connection() as connection:
+            cursor = connection.cursor()
+            document_id = generate_cuid()
+            
+            cursor.execute('''
+                INSERT INTO "documents" 
+                (id, user_id, title, gcs_file_id, gcs_file_path, mime_type, file_size, summary, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            ''', (
+                document_id, user_id, file.filename or "Untitled",
+                file_id, gcs_path, file.content_type, len(file_content),
+                analysis.get('summary', '')
+            ))
+            
+            connection.commit()
         
         # Create embeddings for RAG
         text_content = file_content.decode('utf-8', errors='ignore')
@@ -90,10 +95,8 @@ async def upload_document(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Upload failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-    finally:
-        if connection and connection.is_connected():
-            connection.close()
 
 @router.post("/process-document")
 async def process_document_webhook(
@@ -104,7 +107,6 @@ async def process_document_webhook(
     mimeType: str = Form(...)
 ):
     """Process document from frontend GCS upload (webhook-style endpoint)"""
-    connection = None
     try:
         # Download file from GCS
         file_content = gcs_service.download_file(gcsFileId, userId)
@@ -113,21 +115,20 @@ async def process_document_webhook(
         analysis = await ai_services.analyze_document(file_content, fileName)
         
         # Update database with analysis
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        
-        cursor.execute("""
-            UPDATE documents 
-            SET summary = %s, analysis_data = %s, updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s AND user_id = %s
-        """, (
-            analysis.get('summary', ''),
-            json.dumps(analysis),
-            documentId,
-            userId
-        ))
-        
-        connection.commit()
+        with get_db_connection() as connection:
+            cursor = connection.cursor()
+            
+            cursor.execute('''
+                UPDATE "documents" 
+                SET summary = %s, updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            ''', (
+                analysis.get('summary', ''),
+                documentId,
+                userId
+            ))
+            
+            connection.commit()
         
         # Create embeddings for RAG
         text_content = file_content.decode('utf-8', errors='ignore')
@@ -137,8 +138,5 @@ async def process_document_webhook(
         return {"success": True, "message": "Document processed successfully"}
         
     except Exception as e:
-        print(f"❌ Document processing failed: {e}")
+        logger.error(f"Document processing failed: {e}")
         return {"success": False, "error": str(e)}
-    finally:
-        if connection and connection.is_connected():
-            connection.close()

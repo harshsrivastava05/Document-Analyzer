@@ -11,7 +11,8 @@ import sys
 import time
 from datetime import datetime
 from typing import Dict, Any
-import mysql.connector
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -51,28 +52,39 @@ class HealthChecker:
     def check_database(self) -> bool:
         """Check database connectivity"""
         try:
-            connection = mysql.connector.connect(
-                host=os.getenv("MYSQL_HOST"),
-                user=os.getenv("MYSQL_USER"),
-                password=os.getenv("MYSQL_PASSWORD"),
-                database=os.getenv("MYSQL_DATABASE"),
-                port=int(os.getenv("MYSQL_PORT", 3306)),
-                connect_timeout=5
-            )
+            # Try direct URL connection first
+            if os.getenv("DATABASE_URL"):
+                connection = psycopg2.connect(
+                    os.getenv("DATABASE_URL"),
+                    cursor_factory=RealDictCursor,
+                    connect_timeout=5
+                )
+            else:
+                # Fallback to individual parameters
+                connection = psycopg2.connect(
+                    host=os.getenv("NEON_HOST"),
+                    database=os.getenv("NEON_DATABASE"),
+                    user=os.getenv("NEON_USER"),
+                    password=os.getenv("NEON_PASSWORD"),
+                    port=int(os.getenv("NEON_PORT", 5432)),
+                    sslmode=os.getenv("NEON_SSL_MODE", "require"),
+                    cursor_factory=RealDictCursor,
+                    connect_timeout=5
+                )
             
             cursor = connection.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
             
             # Get table counts
-            cursor.execute("SELECT COUNT(*) FROM users")
+            cursor.execute('SELECT COUNT(*) FROM "users"')
             user_count = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(*) FROM documents")
+            cursor.execute('SELECT COUNT(*) FROM "documents"')
             doc_count = cursor.fetchone()[0]
             
-            cursor.execute("SELECT COUNT(*) FROM chat_history")
-            chat_count = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM "qnas"')
+            qna_count = cursor.fetchone()[0]
             
             connection.close()
             
@@ -80,7 +92,7 @@ class HealthChecker:
                 'status': 'healthy',
                 'users': user_count,
                 'documents': doc_count,
-                'chat_messages': chat_count
+                'qnas': qna_count
             }
             return True
             
@@ -109,12 +121,11 @@ class HealthChecker:
         
         # Check Pinecone
         try:
-            import pinecone
-            pinecone.init(api_key=os.getenv("PINECONE_API_KEY"))
-            # Test connection
+            from pinecone import Pinecone
+            pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
             index_name = os.getenv("PINECONE_INDEX_NAME")
             if index_name:
-                index = Pinecone.Index(index_name)
+                index = pc.Index(index_name)
                 stats = index.describe_index_stats()
                 self.results['pinecone'] = {
                     'status': 'connected',
@@ -132,7 +143,7 @@ class HealthChecker:
         try:
             import cohere
             client = cohere.Client(os.getenv("COHERE_API_KEY"))
-            # Simple test embedding
+            # Simple test
             self.results['cohere'] = {'status': 'configured'}
             results['cohere'] = True
         except Exception as e:
@@ -204,7 +215,7 @@ class HealthChecker:
         print(f"   {'✅' if api_ok else '❌'} API: {'Healthy' if api_ok else 'Error'}")
         
         # Database Check
-        print("🗄️ Checking database...")
+        print("🐘 Checking NeonDB...")
         db_ok = self.check_database()
         print(f"   {'✅' if db_ok else '❌'} Database: {'Connected' if db_ok else 'Error'}")
         
