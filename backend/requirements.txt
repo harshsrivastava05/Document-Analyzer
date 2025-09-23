@@ -11,6 +11,6 @@ pydantic==2.5.0
 python-dotenv==1.0.0
 aiofiles==23.2.1
 PyJWT==2.8.0
-pinecone 
-cohere 
-google-auth
+pinecone[grpc]==2.2.4
+cohere==4.21
+google-auth==2.23.4

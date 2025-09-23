@@ -5,6 +5,7 @@ import os
 from fastapi import HTTPException
 import logging
 from contextlib import contextmanager
+from urllib.parse import urlparse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -13,19 +14,45 @@ logger = logging.getLogger(__name__)
 # Connection pool
 connection_pool = None
 
+def parse_database_url(database_url: str) -> dict:
+    """Parse DATABASE_URL into connection parameters"""
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is not set")
+    
+    parsed = urlparse(database_url)
+    return {
+        'host': parsed.hostname,
+        'port': parsed.port or 5432,
+        'database': parsed.path[1:],  # Remove leading '/'
+        'user': parsed.username,
+        'password': parsed.password,
+        'sslmode': 'require'  # Default for cloud databases
+    }
+
 def init_connection_pool():
-    """Initialize connection pool for NeonDB"""
+    """Initialize connection pool for database"""
     global connection_pool
     try:
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            # Fallback to individual environment variables for backward compatibility
+            db_config = {
+                'host': os.getenv("NEON_HOST", "localhost"),
+                'database': os.getenv("NEON_DATABASE", "postgres"),
+                'user': os.getenv("NEON_USER", "postgres"),
+                'password': os.getenv("NEON_PASSWORD", ""),
+                'port': int(os.getenv("NEON_PORT", 5432)),
+                'sslmode': os.getenv("NEON_SSL_MODE", "require")
+            }
+            logger.info("Using individual environment variables for database connection")
+        else:
+            db_config = parse_database_url(database_url)
+            logger.info(f"Using DATABASE_URL for connection to {db_config['host']}")
+        
         connection_pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=1,
             maxconn=20,
-            host=os.getenv("NEON_HOST"),
-            database=os.getenv("NEON_DATABASE"),
-            user=os.getenv("NEON_USER"),
-            password=os.getenv("NEON_PASSWORD"),
-            port=int(os.getenv("NEON_PORT", 5432)),
-            sslmode=os.getenv("NEON_SSL_MODE", "require"),
+            **db_config,
             # Connection timeout
             connect_timeout=10,
             # Keep connections alive
@@ -33,7 +60,7 @@ def init_connection_pool():
             keepalives_interval=30,
             keepalives_count=3
         )
-        logger.info("✅ NeonDB connection pool initialized")
+        logger.info("✅ Database connection pool initialized")
         return True
     except Exception as e:
         logger.error(f"❌ Failed to initialize connection pool: {e}")
@@ -49,6 +76,8 @@ def get_db_connection():
     connection = None
     try:
         connection = connection_pool.getconn()
+        if connection is None:
+            raise Exception("Failed to get connection from pool")
         yield connection
     except Exception as e:
         logger.error(f"Database connection error: {str(e)}")
@@ -62,14 +91,22 @@ def get_db_connection():
 def get_db_connection_direct():
     """Direct connection method for backwards compatibility"""
     try:
+        database_url = os.getenv("DATABASE_URL")
+        if database_url:
+            db_config = parse_database_url(database_url)
+        else:
+            db_config = {
+                'host': os.getenv("NEON_HOST", "localhost"),
+                'database': os.getenv("NEON_DATABASE", "postgres"),
+                'user': os.getenv("NEON_USER", "postgres"),
+                'password': os.getenv("NEON_PASSWORD", ""),
+                'port': int(os.getenv("NEON_PORT", 5432)),
+                'sslmode': os.getenv("NEON_SSL_MODE", "require")
+            }
+        
         connection = psycopg2.connect(
-            host=os.getenv("NEON_HOST"),
-            database=os.getenv("NEON_DATABASE"),
-            user=os.getenv("NEON_USER"),
-            password=os.getenv("NEON_PASSWORD"),
-            port=int(os.getenv("NEON_PORT", 5432)),
-            sslmode=os.getenv("NEON_SSL_MODE", "require"),
-            cursor_factory=RealDictCursor
+            cursor_factory=RealDictCursor,
+            **db_config
         )
         return connection
     except Exception as e:
