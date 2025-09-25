@@ -1,6 +1,6 @@
 # backend/routers/upload.py
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks # type: ignore
-from fastapi.responses import JSONResponse
+# from fastapi.responses import JSONResponse 
 from services.auth_service import get_current_user
 from services.gcs_service import gcs_service
 from services.ai_services import ai_services
@@ -196,6 +196,51 @@ async def upload_document(
     except Exception as e:
         logger.error(f"❌ Upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+    
+# backend/routers/upload.py - Add this new route
+@router.post("/upload-internal")
+async def upload_document_internal(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user_id: str = Form(...),  # Accept user_id directly without JWT verification
+    documentId: Optional[str] = Form(None)
+):
+    """Internal upload endpoint for frontend-to-backend communication"""
+    try:
+        # Validate file
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+        
+        allowed_types = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/plain'
+        ]
+        
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file type. Only PDF, DOC, DOCX, and TXT files are allowed."
+            )
+        
+        # Validate file size (10MB max)
+        file_content = await file.read()
+        if len(file_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+        
+        logger.info(f"📄 Processing internal upload: {file.filename} for user {user_id}")
+        
+        # Rest of the upload logic (same as existing upload endpoint)
+        # ... (copy the existing upload logic here)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Internal upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
 
 @router.get("/upload/status/{document_id}")
 async def get_upload_status(

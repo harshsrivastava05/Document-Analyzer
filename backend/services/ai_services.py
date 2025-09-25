@@ -1,6 +1,6 @@
-import google.generativeai as genai
-from pinecone import Pinecone, ServerlessSpec
-import cohere
+import google.generativeai as genai #type:ignore
+from pinecone import Pinecone, ServerlessSpec #type:ignore
+import cohere #type:ignore
 import os
 import json
 from typing import List, Dict, Any

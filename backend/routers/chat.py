@@ -3,6 +3,7 @@ from services.auth_service import get_current_user
 from services.ai_services import ai_services
 from database import get_db_connection
 from models.schemas import ChatRequest, ChatResponse, ChatMessage
+from psycopg2.extras import RealDictCursor
 from typing import List
 import uuid
 import json
@@ -21,7 +22,7 @@ async def ask_question(
     try:
         # Verify user has access to document
         with get_db_connection() as connection:
-            cursor = connection.cursor()
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
             
             cursor.execute('''
                 SELECT id FROM "documents" 
@@ -71,7 +72,7 @@ async def ask_question(
 @router.get("/chat-history")
 async def get_chat_history(
     docId: str = Query(...),
-    userId: str = Query(...),
+    userId: str = Query(None),
     user_id: str = Depends(get_current_user)
 ):
     """Get chat history for a document"""
@@ -80,7 +81,7 @@ async def get_chat_history(
         final_user_id = userId if userId else user_id
         
         with get_db_connection() as connection:
-            cursor = connection.cursor()
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
             
             cursor.execute('''
                 SELECT id, role, content, created_at

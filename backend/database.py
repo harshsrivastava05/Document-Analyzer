@@ -113,8 +113,207 @@ def get_db_connection_direct():
         logger.error(f"Database connection failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
+def check_tables_exist():
+    """Check if database tables already exist"""
+    with get_db_connection() as connection:
+        try:
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN ('users', 'accounts', 'sessions', 'documents', 'qnas', 'verification_tokens')
+            """)
+            result = cursor.fetchone()
+            table_count = result['count'] if result else 0
+            # We expect 6 tables in total
+            return table_count == 6
+        except Exception as e:
+            logger.error(f"Failed to check existing tables: {e}")
+            return False
+
+def create_tables_if_not_exist():
+    """Create database tables only if they don't already exist"""
+    try:
+        with get_db_connection() as connection:
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
+            
+            # Create users table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS "users" (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    name TEXT,
+                    email TEXT UNIQUE,
+                    email_verified TIMESTAMPTZ,
+                    image TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ''')
+            
+            # Create index on email if it doesn't exist
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "users_email_idx" ON "users"("email")
+            ''')
+            
+            # Create accounts table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS "accounts" (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_account_id TEXT NOT NULL,
+                    refresh_token TEXT,
+                    access_token TEXT,
+                    expires_at INTEGER,
+                    token_type TEXT,
+                    scope TEXT,
+                    id_token TEXT,
+                    session_state TEXT,
+                    CONSTRAINT accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                    CONSTRAINT accounts_provider_provider_account_id_key UNIQUE (provider, provider_account_id)
+                )
+            ''')
+            
+            # Create index for accounts if it doesn't exist
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "accounts_user_id_idx" ON "accounts"("user_id")
+            ''')
+            
+            # Create sessions table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS "sessions" (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    session_token TEXT NOT NULL UNIQUE,
+                    user_id TEXT NOT NULL,
+                    expires TIMESTAMPTZ NOT NULL,
+                    CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+                )
+            ''')
+            
+            # Create indexes for sessions if they don't exist
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "sessions_user_id_idx" ON "sessions"("user_id")
+            ''')
+            
+            # Create verification_tokens table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS "verification_tokens" (
+                    identifier TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    expires TIMESTAMPTZ NOT NULL,
+                    CONSTRAINT verification_tokens_identifier_token_key UNIQUE (identifier, token)
+                )
+            ''')
+            
+            # Create documents table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS "documents" (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT,
+                    gcs_file_id TEXT NOT NULL,
+                    gcs_file_path TEXT,
+                    mime_type TEXT,
+                    file_size INTEGER,
+                    summary TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+                )
+            ''')
+            
+            # Create indexes for documents if they don't exist
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "documents_user_id_idx" ON "documents"("user_id")
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "documents_gcs_file_id_idx" ON "documents"("gcs_file_id")
+            ''')
+            
+            # Create qnas table if it doesn't exist (equivalent to chat_history)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS "qnas" (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT qnas_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                    CONSTRAINT qnas_document_id_fkey FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE ON UPDATE CASCADE
+                )
+            ''')
+            
+            # Create indexes for qnas if they don't exist
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "qnas_user_id_document_id_idx" ON "qnas"("user_id", "document_id")
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "qnas_user_id_idx" ON "qnas"("user_id")
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS "qnas_document_id_idx" ON "qnas"("document_id")
+            ''')
+            
+            # Create function to automatically update updated_at if it doesn't exist
+            cursor.execute('''
+                CREATE OR REPLACE FUNCTION update_updated_at_column()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    NEW.updated_at = NOW();
+                    RETURN NEW;
+                END;
+                $$ language 'plpgsql';
+            ''')
+            
+            # Create triggers for updated_at if they don't exist
+            cursor.execute('''
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_users_updated_at') THEN
+                        CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON "users"
+                        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+                    END IF;
+                END$$;
+            ''')
+            
+            cursor.execute('''
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_documents_updated_at') THEN
+                        CREATE TRIGGER update_documents_updated_at BEFORE UPDATE ON "documents"
+                        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+                    END IF;
+                END$$;
+            ''')
+            
+            connection.commit()
+            logger.info("✅ Database tables verified/created successfully")
+            
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        raise
+
+def init_db():
+    """Initialize database tables only if they don't exist - preserves existing data"""
+    try:
+        # Check if tables already exist
+        if check_tables_exist():
+            logger.info("✅ Database tables already exist, skipping initialization to preserve data")
+            return
+        
+        logger.info("🏗️ Creating new database schema...")
+        create_tables_if_not_exist()
+        
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        raise
+
 def drop_existing_tables():
-    """Drop existing tables and all related objects to avoid conflicts"""
+    """Drop existing tables and all related objects to avoid conflicts - USE WITH CAUTION"""
+    logger.warning("⚠️ WARNING: Dropping all database tables. This will delete all data!")
     with get_db_connection() as connection:
         try:
             cursor = connection.cursor(cursor_factory=RealDictCursor)
@@ -154,158 +353,6 @@ def drop_existing_tables():
             logger.error(f"Failed to drop existing tables: {e}")
             connection.rollback()
             raise
-
-def init_db():
-    """Initialize database tables matching Prisma schema"""
-    try:
-        # First drop existing tables and all related objects
-        logger.info("🧹 Cleaning up existing database objects...")
-        drop_existing_tables()
-        
-        logger.info("🏗️ Creating new database schema...")
-        with get_db_connection() as connection:
-            cursor = connection.cursor(cursor_factory=RealDictCursor)
-            
-            # Create users table first (no foreign keys)
-            cursor.execute('''
-                CREATE TABLE "users" (
-                    id TEXT NOT NULL PRIMARY KEY,
-                    name TEXT,
-                    email TEXT UNIQUE,
-                    email_verified TIMESTAMPTZ,
-                    image TEXT,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            ''')
-            
-            # Create index on email
-            cursor.execute('CREATE INDEX "users_email_idx" ON "users"("email")')
-            logger.info("✅ Created users table")
-            
-            # Create accounts table
-            cursor.execute('''
-                CREATE TABLE "accounts" (
-                    id TEXT NOT NULL PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    provider TEXT NOT NULL,
-                    provider_account_id TEXT NOT NULL,
-                    refresh_token TEXT,
-                    access_token TEXT,
-                    expires_at INTEGER,
-                    token_type TEXT,
-                    scope TEXT,
-                    id_token TEXT,
-                    session_state TEXT,
-                    CONSTRAINT accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    CONSTRAINT accounts_provider_provider_account_id_key UNIQUE (provider, provider_account_id)
-                )
-            ''')
-            
-            # Create index for accounts
-            cursor.execute('CREATE INDEX "accounts_user_id_idx" ON "accounts"("user_id")')
-            logger.info("✅ Created accounts table")
-            
-            # Create sessions table
-            cursor.execute('''
-                CREATE TABLE "sessions" (
-                    id TEXT NOT NULL PRIMARY KEY,
-                    session_token TEXT NOT NULL UNIQUE,
-                    user_id TEXT NOT NULL,
-                    expires TIMESTAMPTZ NOT NULL,
-                    CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
-                )
-            ''')
-            
-            # Create indexes for sessions
-            cursor.execute('CREATE INDEX "sessions_user_id_idx" ON "sessions"("user_id")')
-            # Note: The UNIQUE constraint on session_token already creates an index, so we don't need a separate one
-            logger.info("✅ Created sessions table")
-            
-            # Create verification_tokens table
-            cursor.execute('''
-                CREATE TABLE "verification_tokens" (
-                    identifier TEXT NOT NULL,
-                    token TEXT NOT NULL,
-                    expires TIMESTAMPTZ NOT NULL,
-                    CONSTRAINT verification_tokens_identifier_token_key UNIQUE (identifier, token)
-                )
-            ''')
-            logger.info("✅ Created verification_tokens table")
-            
-            # Create documents table
-            cursor.execute('''
-                CREATE TABLE "documents" (
-                    id TEXT NOT NULL PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    title TEXT,
-                    gcs_file_id TEXT NOT NULL,
-                    gcs_file_path TEXT,
-                    mime_type TEXT,
-                    file_size INTEGER,
-                    summary TEXT,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    CONSTRAINT documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
-                )
-            ''')
-            
-            # Create indexes for documents
-            cursor.execute('CREATE INDEX "documents_user_id_idx" ON "documents"("user_id")')
-            cursor.execute('CREATE INDEX "documents_gcs_file_id_idx" ON "documents"("gcs_file_id")')
-            logger.info("✅ Created documents table")
-            
-            # Create qnas table (equivalent to chat_history)
-            cursor.execute('''
-                CREATE TABLE "qnas" (
-                    id TEXT NOT NULL PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    document_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    CONSTRAINT qnas_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    CONSTRAINT qnas_document_id_fkey FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE ON UPDATE CASCADE
-                )
-            ''')
-            
-            # Create indexes for qnas
-            cursor.execute('CREATE INDEX "qnas_user_id_document_id_idx" ON "qnas"("user_id", "document_id")')
-            cursor.execute('CREATE INDEX "qnas_user_id_idx" ON "qnas"("user_id")')
-            cursor.execute('CREATE INDEX "qnas_document_id_idx" ON "qnas"("document_id")')
-            logger.info("✅ Created qnas table")
-            
-            # Create function to automatically update updated_at
-            cursor.execute('''
-                CREATE OR REPLACE FUNCTION update_updated_at_column()
-                RETURNS TRIGGER AS $$
-                BEGIN
-                    NEW.updated_at = NOW();
-                    RETURN NEW;
-                END;
-                $$ language 'plpgsql';
-            ''')
-            logger.info("✅ Created update function")
-            
-            # Create triggers for updated_at
-            cursor.execute('''
-                CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON "users"
-                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-            ''')
-            
-            cursor.execute('''
-                CREATE TRIGGER update_documents_updated_at BEFORE UPDATE ON "documents"
-                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-            ''')
-            logger.info("✅ Created triggers")
-            
-            connection.commit()
-            logger.info("✅ Database tables initialized successfully with proper foreign key constraints")
-            
-    except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
-        raise
 
 def test_db_connection():
     """Test database connection and basic operations"""
@@ -366,10 +413,16 @@ def get_db_stats():
         return {}
 
 def reset_database():
-    """Completely reset the database - useful for development"""
+    """Completely reset the database - USE WITH CAUTION - This will delete all data!"""
     try:
+        confirm = input("⚠️ WARNING: This will delete ALL data. Type 'RESET' to confirm: ")
+        if confirm != "RESET":
+            logger.info("Database reset cancelled")
+            return False
+            
         logger.info("🔄 Resetting database...")
-        init_db()
+        drop_existing_tables()
+        create_tables_if_not_exist()
         logger.info("✅ Database reset complete")
         return True
     except Exception as e:

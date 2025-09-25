@@ -1,7 +1,6 @@
-// frontend/src/app/api/proxy/upload/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { proxy } from "@/lib/api";
 import { auth } from "@/lib/auth";
+import { createJWTForBackend } from "@/lib/jwt";
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,19 +10,16 @@ export async function POST(req: NextRequest) {
     }
 
     const form = await req.formData();
-    form.append("userId", session.user.id);
-
-    // Create JWT token for backend authentication (if your backend expects it)
-    // You might need to implement this based on your auth system
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+
+    // Create JWT token for backend authentication
+    const jwtToken = createJWTForBackend(session.user.id);
 
     const res = await fetch(`${backendUrl}/api/upload`, { 
       method: "POST", 
       body: form,
-      // Remove Content-Type header for FormData - let the browser set it
       headers: {
-        // Add any authentication headers your backend expects
-        // 'Authorization': `Bearer ${jwtToken}`, // If needed
+        'Authorization': `Bearer ${jwtToken}`,
       }
     });
 
@@ -49,15 +45,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
     console.error('Upload proxy API error:', error);
-    
-    // Provide specific error messages based on error type
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      return NextResponse.json(
-        { error: "Unable to connect to backend service. Please check if the backend is running." }, 
-        { status: 503 }
-      );
-    }
-    
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to upload file" }, 
       { status: 503 }
