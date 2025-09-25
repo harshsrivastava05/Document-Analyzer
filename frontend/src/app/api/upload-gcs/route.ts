@@ -85,27 +85,44 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Try to notify backend (optional - don't fail if backend is down)
+    // Try to notify backend using the CORRECT endpoint: /api/upload
+    // Also need to send proper FormData like the backend expects
     try {
-      const backendResponse = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/process-document`, {
+      console.log(`🔔 Notifying backend at: ${process.env.NEXT_PUBLIC_BACKEND_URL}/api/upload`);
+      
+      // Create FormData for backend upload endpoint
+      const backendFormData = new FormData();
+      
+      // Re-create the file blob for backend
+      const fileBlob = new Blob([buffer], { type: file.type });
+      const reconstructedFile = new File([fileBlob], file.name, { type: file.type });
+      
+      backendFormData.append('file', reconstructedFile);
+      backendFormData.append('userId', session.user.id);
+      backendFormData.append('documentId', document.id); // Pass the document ID we just created
+
+      const backendResponse = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/upload`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          documentId: document.id,
-          userId: session.user.id,
-          gcsFileId: uploadResult.fileId,
-          fileName: file.name,
-          mimeType: file.type,
-        }),
-        signal: AbortSignal.timeout(5000), // 5 second timeout
+        body: backendFormData,
+        signal: AbortSignal.timeout(30000), // 30 second timeout for processing
       });
 
       if (backendResponse.ok) {
-        console.log('✅ Backend processing initiated');
+        const backendData = await backendResponse.json();
+        console.log('✅ Backend processing completed successfully');
+        
+        // Update document with analysis results if provided
+        if (backendData.document?.summary) {
+          await prisma.document.update({
+            where: { id: document.id },
+            data: {
+              summary: backendData.document.summary
+            }
+          });
+        }
       } else {
-        console.warn('⚠️ Backend processing failed, but file was uploaded successfully');
+        const errorText = await backendResponse.text();
+        console.warn('⚠️ Backend processing failed:', backendResponse.status, errorText);
       }
     } catch (error) {
       console.warn('⚠️ Failed to notify backend (server may be down):', error);

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query  # type: ignore
 from services.auth_service import get_current_user
 from services.gcs_service import gcs_service
 from database import get_db_connection
@@ -76,7 +76,7 @@ async def download_document(
             # Download from GCS
             file_content = gcs_service.download_file(document['gcs_file_id'], user_id)
             
-            from fastapi.responses import Response
+            from fastapi.responses import Response  # type: ignore
             return Response(
                 content=file_content,
                 media_type=document['mime_type'] or 'application/octet-stream',
