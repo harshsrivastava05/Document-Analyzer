@@ -45,9 +45,27 @@ def safe_db_operation(operation_func, *args, max_retries=3, **kwargs):
             logger.error(f"Unexpected database error: {e}")
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+def verify_user_exists(cursor, user_id):
+    """Verify user exists, create if not - safety net"""
+    cursor.execute('SELECT id FROM "users" WHERE id = %s', (user_id,))
+    existing_user = cursor.fetchone()
+    
+    if not existing_user:
+        logger.info(f"👤 Creating missing user {user_id[:8]}... in database (safety net)")
+        cursor.execute('''
+            INSERT INTO "users" (id, created_at, updated_at)
+            VALUES (%s, NOW(), NOW())
+            ON CONFLICT (id) DO NOTHING
+        ''', (user_id,))
+    
+    return True
+
 def create_or_update_document(cursor, document_id, user_id, filename, file_id, gcs_path, content_type, file_size):
     """Database operation to create or update document"""
     try:
+        # First ensure user exists (safety net)
+        verify_user_exists(cursor, user_id)
+        
         # Check if document exists
         cursor.execute('''
             SELECT id FROM "documents" WHERE id = %s AND user_id = %s
@@ -57,6 +75,7 @@ def create_or_update_document(cursor, document_id, user_id, filename, file_id, g
         
         if existing_doc:
             # Update existing document
+            logger.info(f"📝 Updating existing document {document_id[:8]}...")
             cursor.execute('''
                 UPDATE "documents" 
                 SET gcs_file_id = %s, gcs_file_path = %s, mime_type = %s, 
@@ -70,6 +89,7 @@ def create_or_update_document(cursor, document_id, user_id, filename, file_id, g
             ))
         else:
             # Create new document
+            logger.info(f"📄 Creating new document {document_id[:8]}...")
             cursor.execute('''
                 INSERT INTO "documents" 
                 (id, user_id, title, gcs_file_id, gcs_file_path, mime_type, file_size, summary, created_at, updated_at)
@@ -80,9 +100,16 @@ def create_or_update_document(cursor, document_id, user_id, filename, file_id, g
                 content_type, file_size, 'Processing with Gemini 2.5 Flash AI...'
             ))
         
-        return cursor.fetchone()
+        result = cursor.fetchone()
+        if not result:
+            raise Exception("Failed to create/update document - no result returned")
+        
+        logger.info(f"✅ Document {document_id[:8]}... saved successfully")
+        return result
+        
     except Exception as e:
-        logger.error(f"Error in create_or_update_document: {e}")
+        logger.error(f"❌ Error in create_or_update_document: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise
 
 def update_document_summary(cursor, document_id, user_id, summary, analysis_data=None):
@@ -166,7 +193,7 @@ async def process_document_background(
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user),  # This now ensures user exists
     documentId: Optional[str] = Form(None)
 ):
     """Upload and process document with JWT authentication and Gemini 2.5 Flash"""
@@ -208,7 +235,7 @@ async def upload_document(
                 file.content_type or "application/octet-stream",
                 user_id
             )
-            logger.info(f"✅ File uploaded to GCS: {gcs_path}")
+            logger.info(f"✅ File uploaded to GCS: gs://doc-analyzer/{gcs_path}")
         except Exception as gcs_error:
             logger.error(f"❌ GCS upload failed: {gcs_error}")
             raise HTTPException(status_code=500, detail=f"File storage failed: {str(gcs_error)}")
@@ -233,6 +260,7 @@ async def upload_document(
             raise
         except Exception as db_error:
             logger.error(f"❌ Database save failed: {db_error}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=503, 
                 detail=f"File uploaded but database save failed: {str(db_error)}"
@@ -326,7 +354,7 @@ async def upload_document_direct(
                 file.content_type or "application/octet-stream",
                 userId
             )
-            logger.info(f"✅ File uploaded to GCS: {gcs_path}")
+            logger.info(f"✅ File uploaded to GCS: gs://doc-analyzer/{gcs_path}")
         except Exception as gcs_error:
             logger.error(f"❌ GCS upload failed: {gcs_error}")
             raise HTTPException(status_code=500, detail=f"File storage failed: {str(gcs_error)}")
@@ -351,6 +379,7 @@ async def upload_document_direct(
             raise
         except Exception as db_error:
             logger.error(f"❌ Database save failed: {db_error}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=503, 
                 detail=f"File uploaded but database save failed: {str(db_error)}"
