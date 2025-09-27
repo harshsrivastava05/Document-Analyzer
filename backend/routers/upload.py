@@ -1,12 +1,11 @@
 # backend/routers/upload.py
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks # type: ignore
-# from fastapi.responses import JSONResponse 
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks #type:ignore
 from services.auth_service import get_current_user
 from services.gcs_service import gcs_service
 from services.ai_services import ai_services
 from database import get_db_connection
 from models.schemas import UploadResponse, DocumentResponse
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor #type:ignore
 import uuid
 import json
 from datetime import datetime
@@ -82,7 +81,7 @@ async def upload_document(
     user_id: str = Depends(get_current_user),
     documentId: Optional[str] = Form(None)  # Optional, for frontend-created documents
 ):
-    """Upload and process document"""
+    """Upload and process document with JWT authentication"""
     try:
         # Validate file
         if not file.filename:
@@ -196,16 +195,15 @@ async def upload_document(
     except Exception as e:
         logger.error(f"❌ Upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-    
-# backend/routers/upload.py - Add this new route
-@router.post("/upload-internal")
-async def upload_document_internal(
+
+@router.post("/upload-direct", response_model=UploadResponse)
+async def upload_document_direct(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Form(...),  # Accept user_id directly without JWT verification
+    userId: str = Form(...),  # Accept userId directly from form
     documentId: Optional[str] = Form(None)
 ):
-    """Internal upload endpoint for frontend-to-backend communication"""
+    """Upload document with userId from form data (alternative for frontend integration)"""
     try:
         # Validate file
         if not file.filename:
@@ -229,18 +227,96 @@ async def upload_document_internal(
         if len(file_content) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
         
-        logger.info(f"📄 Processing internal upload: {file.filename} for user {user_id}")
+        logger.info(f"📄 Processing direct upload: {file.filename} for user {userId}")
         
-        # Rest of the upload logic (same as existing upload endpoint)
-        # ... (copy the existing upload logic here)
+        # Upload to Google Cloud Storage
+        file_id, gcs_path = gcs_service.upload_file(
+            file_content, 
+            file.filename, 
+            file.content_type or "application/octet-stream",
+            userId
+        )
+        
+        logger.info(f"☁️ File uploaded to GCS: {gcs_path}")
+        
+        # Generate document ID if not provided
+        if not documentId:
+            documentId = generate_cuid()
+        
+        # Save to database
+        with get_db_connection() as connection:
+            cursor = connection.cursor(cursor_factory=RealDictCursor)
+            
+            # Check if document already exists (for frontend-created documents)
+            cursor.execute('''
+                SELECT id FROM "documents" WHERE id = %s AND user_id = %s
+            ''', (documentId, userId))
+            
+            existing_doc = cursor.fetchone()
+            
+            if existing_doc:
+                # Update existing document
+                cursor.execute('''
+                    UPDATE "documents" 
+                    SET gcs_file_id = %s, gcs_file_path = %s, mime_type = %s, 
+                        file_size = %s, summary = %s, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                    RETURNING *
+                ''', (
+                    file_id, gcs_path, file.content_type, 
+                    len(file_content), 'Processing with AI...', 
+                    documentId, userId
+                ))
+            else:
+                # Create new document
+                cursor.execute('''
+                    INSERT INTO "documents" 
+                    (id, user_id, title, gcs_file_id, gcs_file_path, mime_type, file_size, summary, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    RETURNING *
+                ''', (
+                    documentId, userId, file.filename, file_id, gcs_path,
+                    file.content_type, len(file_content), 'Processing with AI...'
+                ))
+            
+            document = cursor.fetchone()
+            connection.commit()
+        
+        # Add background task for AI processing
+        background_tasks.add_task(
+            process_document_background,
+            file_content=file_content,
+            filename=file.filename,
+            document_id=documentId,
+            user_id=userId,
+            gcs_file_id=file_id
+        )
+        
+        logger.info(f"✅ Document uploaded and queued for processing: {documentId}")
+        
+        # Create response
+        document_response = DocumentResponse(
+            id=document['id'],
+            title=document['title'],
+            gcs_file_id=document['gcs_file_id'],
+            mime_type=document['mime_type'],
+            file_size=document['file_size'],
+            summary=document['summary'],
+            created_at=document['created_at'],
+            updated_at=document['updated_at']
+        )
+        
+        return UploadResponse(
+            success=True,
+            document=document_response,
+            message="Document uploaded and processing with AI..."
+        )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Internal upload failed: {e}")
+        logger.error(f"❌ Upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-
 
 @router.get("/upload/status/{document_id}")
 async def get_upload_status(

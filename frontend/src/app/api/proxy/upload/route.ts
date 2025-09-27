@@ -1,3 +1,4 @@
+// frontend/src/app/api/proxy/upload/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { createJWTForBackend } from "@/lib/jwt";
@@ -15,17 +16,21 @@ export async function POST(req: NextRequest) {
     // Create JWT token for backend authentication
     const jwtToken = createJWTForBackend(session.user.id);
 
+    console.log('🔑 Created JWT token for user:', session.user.id);
+    console.log('📡 Uploading to:', `${backendUrl}/api/upload`);
+
     const res = await fetch(`${backendUrl}/api/upload`, { 
       method: "POST", 
       body: form,
       headers: {
         'Authorization': `Bearer ${jwtToken}`,
+        // Don't set Content-Type for FormData - let fetch set it automatically
       }
     });
 
     if (!res.ok) {
       const errorText = await res.text();
-      console.error('Backend upload error:', res.status, errorText);
+      console.error('❌ Backend upload error:', res.status, errorText);
       
       try {
         const errorJson = JSON.parse(errorText);
@@ -42,9 +47,11 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await res.json();
+    console.log('✅ Upload successful:', data);
     return NextResponse.json(data, { status: res.status });
+    
   } catch (error) {
-    console.error('Upload proxy API error:', error);
+    console.error('❌ Upload proxy API error:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to upload file" }, 
       { status: 503 }
