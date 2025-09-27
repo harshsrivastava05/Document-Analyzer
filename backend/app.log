@@ -1,0 +1,42 @@
+2025-09-27 22:46:57,090 - core.logging_config - ERROR - Traceback (most recent call last):
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\core\lifespan.py", line 17, in lifespan
+    init_db()
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\schema.py", line 34, in init_db
+    create_tables_if_not_exist()
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\schema.py", line 21, in create_tables_if_not_exist
+    with get_db_connection() as connection:
+  File "C:\Users\Harsh\anaconda3\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\connection.py", line 78, in _get_conn
+    raise HTTPException(status_code=500, detail="DB pool not available")
+fastapi.exceptions.HTTPException
+
+2025-09-27 22:47:10,260 - core.logging_config - ERROR - Traceback (most recent call last):
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\core\lifespan.py", line 17, in lifespan
+    init_db()
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\schema.py", line 34, in init_db
+    create_tables_if_not_exist()
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\schema.py", line 21, in create_tables_if_not_exist
+    with get_db_connection() as connection:
+  File "C:\Users\Harsh\anaconda3\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\connection.py", line 78, in _get_conn
+    raise HTTPException(status_code=500, detail="DB pool not available")
+fastapi.exceptions.HTTPException
+
+2025-09-27 22:47:28,493 - core.logging_config - ERROR - Traceback (most recent call last):
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\core\lifespan.py", line 17, in lifespan
+    init_db()
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\schema.py", line 34, in init_db
+    create_tables_if_not_exist()
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\schema.py", line 21, in create_tables_if_not_exist
+    with get_db_connection() as connection:
+  File "C:\Users\Harsh\anaconda3\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\Harsh\OneDrive\Desktop\ai-doc-analyzer\backend\db\connection.py", line 78, in _get_conn
+    raise HTTPException(status_code=500, detail="DB pool not available")
+fastapi.exceptions.HTTPException
+
