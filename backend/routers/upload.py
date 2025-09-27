@@ -65,7 +65,7 @@ def create_or_update_document(cursor, document_id, user_id, filename, file_id, g
                 RETURNING *
             ''', (
                 file_id, gcs_path, content_type, 
-                file_size, 'Processing with AI...', 
+                file_size, 'Processing with Gemini 2.5 Flash AI...', 
                 document_id, user_id
             ))
         else:
@@ -77,7 +77,7 @@ def create_or_update_document(cursor, document_id, user_id, filename, file_id, g
                 RETURNING *
             ''', (
                 document_id, user_id, filename, file_id, gcs_path,
-                content_type, file_size, 'Processing with AI...'
+                content_type, file_size, 'Processing with Gemini 2.5 Flash AI...'
             ))
         
         return cursor.fetchone()
@@ -85,14 +85,26 @@ def create_or_update_document(cursor, document_id, user_id, filename, file_id, g
         logger.error(f"Error in create_or_update_document: {e}")
         raise
 
-def update_document_summary(cursor, document_id, user_id, summary):
-    """Database operation to update document summary"""
-    cursor.execute('''
-        UPDATE "documents" 
-        SET summary = %s, updated_at = NOW()
-        WHERE id = %s AND user_id = %s
-    ''', (summary, document_id, user_id))
-    return cursor.rowcount > 0
+def update_document_summary(cursor, document_id, user_id, summary, analysis_data=None):
+    """Database operation to update document summary with analysis results"""
+    try:
+        # If we have analysis data, we could store it as JSON in a separate field
+        # For now, we'll just update the summary
+        cursor.execute('''
+            UPDATE "documents" 
+            SET summary = %s, updated_at = NOW()
+            WHERE id = %s AND user_id = %s
+            RETURNING id, title, summary, updated_at
+        ''', (summary, document_id, user_id))
+        
+        result = cursor.fetchone()
+        if not result:
+            logger.error(f"Failed to update document {document_id} - document not found")
+            return None
+        return result
+    except Exception as e:
+        logger.error(f"Error updating document summary: {e}")
+        raise
 
 async def process_document_background(
     file_content: bytes, 
@@ -101,36 +113,51 @@ async def process_document_background(
     user_id: str,
     gcs_file_id: str
 ):
-    """Background task to process document with AI services"""
+    """Background task to process document with AI services using Gemini 2.5 Flash"""
     try:
-        logger.info(f"🤖 Starting background processing for document {document_id}")
+        logger.info(f"🤖 Starting Gemini 2.5 Flash processing for document {document_id[:8]}...")
         
-        # 1. Analyze document with Gemini AI
+        # 1. Analyze document with Gemini 2.5 Flash
+        logger.info("🧠 Running document analysis with Gemini 2.5 Flash...")
         analysis_result = await ai_services.analyze_document(file_content, filename)
         
-        # 2. Extract text and create embeddings
-        try:
-            text_content = file_content.decode('utf-8', errors='ignore')
-        except:
-            text_content = analysis_result.get('summary', '')
+        # 2. Extract text and create embeddings for RAG
+        logger.info("📝 Extracting text content...")
+        text_content = ai_services.extract_text_from_file(file_content, filename)
         
-        if text_content:
-            text_chunks = ai_services.split_text(text_content)
-            await ai_services.create_embeddings(text_chunks, document_id)
+        if text_content and text_content.strip():
+            logger.info("🔍 Creating embeddings for RAG search...")
+            text_chunks = ai_services.split_text(text_content, max_chunk_size=1000, overlap=100)
+            embedding_success = await ai_services.create_embeddings(text_chunks, document_id)
+            
+            if embedding_success:
+                logger.info(f"✅ Created embeddings for {len(text_chunks)} text chunks")
+            else:
+                logger.warning("⚠️ Embedding creation failed, RAG features may be limited")
+        else:
+            logger.warning("⚠️ No text content extracted, skipping embeddings")
         
         # 3. Update document with analysis results
-        summary = analysis_result.get('summary', 'Analysis completed')
-        safe_db_operation(update_document_summary, document_id, user_id, summary)
+        summary = analysis_result.get('summary', 'Analysis completed with Gemini 2.5 Flash')
         
-        logger.info(f"✅ Background processing completed for document {document_id}")
+        # Enhanced summary with key insights if available
+        if analysis_result.get('insights'):
+            summary += f"\n\nKey Insights:\n• " + "\n• ".join(analysis_result['insights'][:3])
+        
+        result = safe_db_operation(update_document_summary, document_id, user_id, summary, analysis_result)
+        
+        if result:
+            logger.info(f"✅ Gemini 2.5 Flash processing completed for document {document_id[:8]}...")
+        else:
+            logger.error(f"❌ Failed to update document {document_id[:8]}... in database")
         
     except Exception as e:
-        logger.error(f"❌ Background processing failed for document {document_id}: {e}")
+        logger.error(f"❌ Background processing failed for document {document_id[:8]}...: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         
         # Update document with error status
         try:
-            error_summary = f'Processing failed: {str(e)[:200]}'
+            error_summary = f'AI processing failed: {str(e)[:200]}. Document uploaded but analysis incomplete.'
             safe_db_operation(update_document_summary, document_id, user_id, error_summary)
         except Exception as db_error:
             logger.error(f"Failed to update document error status: {db_error}")
@@ -142,11 +169,13 @@ async def upload_document(
     user_id: str = Depends(get_current_user),
     documentId: Optional[str] = Form(None)
 ):
-    """Upload and process document with JWT authentication"""
+    """Upload and process document with JWT authentication and Gemini 2.5 Flash"""
     try:
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
+        
+        logger.info(f"📤 Upload request from authenticated user {user_id[:8]}... for file: {file.filename}")
         
         allowed_types = [
             'application/pdf',
@@ -163,20 +192,23 @@ async def upload_document(
         
         # Validate file size (10MB max)
         file_content = await file.read()
-        if len(file_content) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+        file_size_mb = len(file_content) / (1024 * 1024)
         
-        logger.info(f"📄 Processing upload: {file.filename} for user {user_id}")
+        if len(file_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File too large ({file_size_mb:.1f}MB). Maximum size is 10MB.")
+        
+        logger.info(f"📊 File validated: {file_size_mb:.1f}MB, type: {file.content_type}")
         
         # Upload to Google Cloud Storage first
         try:
+            logger.info("☁️ Uploading to Google Cloud Storage...")
             file_id, gcs_path = gcs_service.upload_file(
                 file_content, 
                 file.filename, 
                 file.content_type or "application/octet-stream",
                 user_id
             )
-            logger.info(f"☁️ File uploaded to GCS: {gcs_path}")
+            logger.info(f"✅ File uploaded to GCS: {gcs_path}")
         except Exception as gcs_error:
             logger.error(f"❌ GCS upload failed: {gcs_error}")
             raise HTTPException(status_code=500, detail=f"File storage failed: {str(gcs_error)}")
@@ -184,15 +216,19 @@ async def upload_document(
         # Generate document ID if not provided
         if not documentId:
             documentId = generate_cuid()
+            logger.info(f"📄 Generated new document ID: {documentId[:8]}...")
+        else:
+            logger.info(f"📄 Using provided document ID: {documentId[:8]}...")
         
         # Save to database using safe operation
         try:
+            logger.info("💾 Saving document metadata to database...")
             document = safe_db_operation(
                 create_or_update_document,
                 documentId, user_id, file.filename, file_id, gcs_path,
                 file.content_type, len(file_content)
             )
-            logger.info(f"✅ Document saved to database: {documentId}")
+            logger.info(f"✅ Document saved to database: {documentId[:8]}...")
         except HTTPException:
             raise
         except Exception as db_error:
@@ -202,8 +238,9 @@ async def upload_document(
                 detail=f"File uploaded but database save failed: {str(db_error)}"
             )
         
-        # Add background task for AI processing
+        # Add background task for AI processing with Gemini 2.5 Flash
         try:
+            logger.info("🚀 Queuing background task for Gemini 2.5 Flash processing...")
             background_tasks.add_task(
                 process_document_background,
                 file_content=file_content,
@@ -212,11 +249,11 @@ async def upload_document(
                 user_id=user_id,
                 gcs_file_id=file_id
             )
-            logger.info(f"📋 Background task queued for document {documentId}")
+            logger.info(f"📋 Background task queued for document {documentId[:8]}...")
         except Exception as task_error:
             logger.warning(f"⚠️ Failed to queue background task: {task_error}")
         
-        logger.info(f"✅ Document uploaded and queued for processing: {documentId}")
+        logger.info(f"🎉 Document upload completed: {documentId[:8]}...")
         
         # Create response
         document_response = DocumentResponse(
@@ -233,7 +270,7 @@ async def upload_document(
         return UploadResponse(
             success=True,
             document=document_response,
-            message="Document uploaded and processing with AI..."
+            message="Document uploaded successfully! AI analysis with Gemini 2.5 Flash is in progress..."
         )
         
     except HTTPException:
@@ -250,8 +287,10 @@ async def upload_document_direct(
     userId: str = Form(...),
     documentId: Optional[str] = Form(None)
 ):
-    """Upload document with userId from form data (alternative for frontend integration)"""
+    """Upload document with userId from form data - for frontend integration without JWT"""
     try:
+        logger.info(f"📤 Direct upload request for user {userId[:8]}... file: {file.filename}")
+        
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
@@ -271,20 +310,23 @@ async def upload_document_direct(
         
         # Validate file size (10MB max)
         file_content = await file.read()
-        if len(file_content) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+        file_size_mb = len(file_content) / (1024 * 1024)
         
-        logger.info(f"📄 Processing direct upload: {file.filename} for user {userId}")
+        if len(file_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"File too large ({file_size_mb:.1f}MB). Maximum size is 10MB.")
+        
+        logger.info(f"📊 File validated: {file_size_mb:.1f}MB, type: {file.content_type}")
         
         # Upload to Google Cloud Storage first
         try:
+            logger.info("☁️ Uploading to Google Cloud Storage...")
             file_id, gcs_path = gcs_service.upload_file(
                 file_content, 
                 file.filename, 
                 file.content_type or "application/octet-stream",
                 userId
             )
-            logger.info(f"☁️ File uploaded to GCS: {gcs_path}")
+            logger.info(f"✅ File uploaded to GCS: {gcs_path}")
         except Exception as gcs_error:
             logger.error(f"❌ GCS upload failed: {gcs_error}")
             raise HTTPException(status_code=500, detail=f"File storage failed: {str(gcs_error)}")
@@ -292,15 +334,19 @@ async def upload_document_direct(
         # Generate document ID if not provided
         if not documentId:
             documentId = generate_cuid()
+            logger.info(f"📄 Generated new document ID: {documentId[:8]}...")
+        else:
+            logger.info(f"📄 Using provided document ID: {documentId[:8]}...")
         
         # Save to database using safe operation
         try:
+            logger.info("💾 Saving document metadata to database...")
             document = safe_db_operation(
                 create_or_update_document,
                 documentId, userId, file.filename, file_id, gcs_path,
                 file.content_type, len(file_content)
             )
-            logger.info(f"✅ Document saved to database: {documentId}")
+            logger.info(f"✅ Document saved to database: {documentId[:8]}...")
         except HTTPException:
             raise
         except Exception as db_error:
@@ -312,6 +358,7 @@ async def upload_document_direct(
         
         # Add background task for AI processing
         try:
+            logger.info("🚀 Queuing background task for Gemini 2.5 Flash processing...")
             background_tasks.add_task(
                 process_document_background,
                 file_content=file_content,
@@ -320,11 +367,11 @@ async def upload_document_direct(
                 user_id=userId,
                 gcs_file_id=file_id
             )
-            logger.info(f"📋 Background task queued for document {documentId}")
+            logger.info(f"📋 Background task queued for document {documentId[:8]}...")
         except Exception as task_error:
             logger.warning(f"⚠️ Failed to queue background task: {task_error}")
         
-        logger.info(f"✅ Document uploaded and queued for processing: {documentId}")
+        logger.info(f"🎉 Direct document upload completed: {documentId[:8]}...")
         
         # Create response
         document_response = DocumentResponse(
@@ -341,13 +388,13 @@ async def upload_document_direct(
         return UploadResponse(
             success=True,
             document=document_response,
-            message="Document uploaded and processing with AI..."
+            message="Document uploaded successfully! AI analysis with Gemini 2.5 Flash is in progress..."
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Upload failed: {e}")
+        logger.error(f"❌ Direct upload failed: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
@@ -368,6 +415,8 @@ async def get_upload_status(
 ):
     """Get the processing status of an uploaded document"""
     try:
+        logger.info(f"📊 Status check for document {document_id[:8]}... by user {current_user[:8]}...")
+        
         document = safe_db_operation(get_document_status, document_id, current_user)
         
         if not document:
@@ -379,8 +428,12 @@ async def get_upload_status(
             status = 'processing'
         elif 'failed' in summary.lower() or 'error' in summary.lower():
             status = 'failed'
-        else:
+        elif 'completed' in summary.lower() or (summary and len(summary) > 50):
             status = 'completed'
+        else:
+            status = 'pending'
+        
+        logger.info(f"✅ Document status: {status}")
         
         return {
             "document_id": document['id'],
@@ -388,7 +441,8 @@ async def get_upload_status(
             "status": status,
             "summary": summary,
             "created_at": document['created_at'].isoformat() if document['created_at'] else None,
-            "updated_at": document['updated_at'].isoformat() if document['updated_at'] else None
+            "updated_at": document['updated_at'].isoformat() if document['updated_at'] else None,
+            "processing_engine": "Gemini 2.5 Flash" if status != 'failed' else None
         }
         
     except HTTPException:

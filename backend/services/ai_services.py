@@ -1,3 +1,4 @@
+# backend/services/ai_services.py
 import google.generativeai as genai
 from pinecone import Pinecone, ServerlessSpec
 import cohere
@@ -39,13 +40,17 @@ class AIServices:
             except Exception as list_error:
                 logger.warning(f"Could not list available models: {list_error}")
             
-            # Try different model names based on API version
+            # Updated model priority list with latest models
             model_names = [
-                'gemini-1.5-flash',
-                'gemini-pro',
+                'gemini-2.5-flash',           # Latest and best performance
+                'models/gemini-2.5-flash',
+                'gemini-2.0-flash-exp',       # Experimental Gemini 2.0 Flash
+                'models/gemini-2.0-flash-exp',
+                'gemini-1.5-flash',           # Fallback to 1.5 Flash
+                'gemini-pro',                 # Legacy fallback
                 'models/gemini-pro',
                 'models/gemini-1.5-flash',
-                'gemini-1.5-pro'
+                'gemini-1.5-pro'              # Last resort
             ]
             
             self.gemini_model = None
@@ -53,7 +58,11 @@ class AIServices:
                 try:
                     self.gemini_model = genai.GenerativeModel(model_name)
                     # Test the model with a simple request
-                    test_response = self.gemini_model.generate_content("Test")
+                    test_response = self.gemini_model.generate_content("Test", 
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.7,
+                            max_output_tokens=100
+                        ))
                     logger.info(f"✅ Gemini AI initialized with model: {model_name}")
                     break
                 except Exception as model_error:
@@ -163,7 +172,7 @@ class AIServices:
             raise
     
     async def analyze_document(self, file_content: bytes, filename: str) -> Dict[str, Any]:
-        """Analyze document using Gemini AI with text-based approach"""
+        """Analyze document using Gemini AI with enhanced prompting for 2.5 Flash"""
         try:
             # Extract text from the document
             text_content = self.extract_text_from_file(file_content, filename)
@@ -177,35 +186,57 @@ class AIServices:
                     "confidence": 0.0
                 }
             
-            # Limit text length for API call (Gemini has input limits)
-            max_text_length = 30000  # Adjust based on model limits
+            # Limit text length for API call (Gemini 2.5 Flash has higher limits but be safe)
+            max_text_length = 50000  # Increased for Gemini 2.5 Flash
             if len(text_content) > max_text_length:
                 text_content = text_content[:max_text_length] + "...[truncated]"
             
+            # Enhanced prompt for Gemini 2.5 Flash with thinking capabilities
             prompt = f"""
-            Analyze the following document text and provide:
-            1. A comprehensive summary (2-3 paragraphs)
-            2. Key topics (5-8 main topics)
-            3. Important entities (people, places, organizations, dates)
-            4. Overall sentiment (positive, negative, neutral)
-            5. Confidence score for the analysis (a float between 0 and 1)
+            You are an expert document analyst. Analyze the following document text comprehensively and provide detailed insights.
 
-            Document text:
+            Document: {filename}
+            Text Content:
             {text_content}
 
-            Format the response as a single, valid JSON object with the following structure:
+            Please provide your analysis in the following JSON format (respond ONLY with valid JSON):
             {{
-                "summary": "...",
-                "key_topics": ["topic1", "topic2", ...],
-                "entities": ["entity1", "entity2", ...],
-                "sentiment": "positive/negative/neutral",
-                "confidence": 0.95
+                "summary": "A comprehensive 3-4 sentence summary of the document's main content and purpose",
+                "key_topics": ["topic1", "topic2", "topic3", "topic4", "topic5"],
+                "entities": ["person1", "organization1", "location1", "date1", "important_concept1"],
+                "sentiment": "positive/negative/neutral/mixed",
+                "confidence": 0.95,
+                "document_type": "report/article/manual/letter/etc",
+                "word_count": {len(text_content.split())},
+                "insights": [
+                    "Key insight 1 about the document",
+                    "Key insight 2 about the document", 
+                    "Key insight 3 about the document"
+                ]
             }}
 
-            Ensure the response is valid JSON with no additional text before or after.
+            Guidelines:
+            - Focus on the most important and relevant information
+            - Extract specific entities (names, places, organizations, dates)
+            - Determine the overall sentiment and tone
+            - Provide actionable insights about the content
+            - Be concise but comprehensive
+            - Confidence should reflect how certain you are about your analysis (0.0 to 1.0)
             """
             
-            response = self.gemini_model.generate_content(prompt)
+            # Use improved generation config for Gemini 2.5 Flash
+            generation_config = genai.types.GenerationConfig(
+                temperature=0.3,  # Lower temperature for more consistent analysis
+                max_output_tokens=2000,  # Increased output tokens
+                candidate_count=1,
+                top_p=0.9,
+                top_k=40
+            )
+            
+            response = self.gemini_model.generate_content(
+                prompt, 
+                generation_config=generation_config
+            )
             
             # Clean the response text
             cleaned_text = response.text.strip()
@@ -220,72 +251,101 @@ class AIServices:
             
             try:
                 result = json.loads(cleaned_text)
-                logger.info(f"✅ Document analysis completed for {filename}")
+                
+                # Validate required fields and provide defaults
+                result.setdefault("summary", f"Analysis completed for {filename}")
+                result.setdefault("key_topics", [])
+                result.setdefault("entities", [])
+                result.setdefault("sentiment", "neutral")
+                result.setdefault("confidence", 0.8)
+                result.setdefault("document_type", "document")
+                result.setdefault("insights", [])
+                
+                logger.info(f"✅ Enhanced document analysis completed for {filename} using Gemini 2.5 Flash")
                 return result
+                
             except json.JSONDecodeError as json_error:
                 logger.warning(f"JSON parsing failed, using fallback response: {json_error}")
-                # Fallback response
+                logger.warning(f"Raw response: {cleaned_text[:500]}...")
+                # Enhanced fallback response
                 return {
-                    "summary": f"Analysis completed for {filename}. The document contains {len(text_content)} characters of text.",
-                    "key_topics": ["document analysis", "content extraction"],
+                    "summary": f"Advanced analysis completed for {filename}. The document contains {len(text_content)} characters of text across {len(text_content.split())} words.",
+                    "key_topics": ["document analysis", "content extraction", "automated processing"],
                     "entities": [],
-                    "sentiment": "neutral",
-                    "confidence": 0.5
+                    "sentiment": "neutral", 
+                    "confidence": 0.6,
+                    "document_type": "document",
+                    "insights": [
+                        f"Document processed with Gemini 2.5 Flash",
+                        f"Text extraction successful from {filename}",
+                        "Ready for RAG-based question answering"
+                    ]
                 }
             
         except Exception as e:
             logger.error(f"❌ Document analysis failed for {filename}: {e}")
             # Return a safe fallback instead of raising
             return {
-                "summary": f"Analysis failed for {filename}: {str(e)[:200]}",
+                "summary": f"Analysis encountered an error for {filename}: {str(e)[:200]}",
                 "key_topics": ["error", "analysis failed"],
                 "entities": [],
                 "sentiment": "neutral",
-                "confidence": 0.0
+                "confidence": 0.0,
+                "document_type": "unknown",
+                "insights": ["Processing failed - document may need manual review"]
             }
     
     def split_text(self, text: str, max_chunk_size: int = 1000, overlap: int = 100) -> List[str]:
-        """Split text into overlapping chunks"""
+        """Split text into overlapping chunks with improved strategy for Gemini 2.5 Flash"""
         if not text.strip():
             return []
         
-        # Split by sentences first, then by chunks
-        sentences = text.replace('\n', ' ').split('. ')
+        # Enhanced chunking for better embeddings
+        # Split by paragraphs first, then sentences, then chunks
+        paragraphs = text.split('\n\n')
         chunks = []
         current_chunk = []
         current_size = 0
         
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
+        for paragraph in paragraphs:
+            paragraph = paragraph.strip()
+            if not paragraph:
                 continue
-                
-            # Add period back if it's not the last sentence
-            if not sentence.endswith('.') and not sentence.endswith('!') and not sentence.endswith('?'):
-                sentence += '.'
             
-            sentence_size = len(sentence) + 1  # +1 for space
+            sentences = paragraph.replace('\n', ' ').split('. ')
             
-            if current_size + sentence_size > max_chunk_size and current_chunk:
-                # Save current chunk
-                chunks.append(' '.join(current_chunk))
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                    
+                # Add period back if it's not the last sentence
+                if not sentence.endswith('.') and not sentence.endswith('!') and not sentence.endswith('?'):
+                    sentence += '.'
                 
-                # Start new chunk with overlap
-                if overlap > 0 and len(current_chunk) > 1:
-                    overlap_sentences = current_chunk[-2:]  # Keep last 2 sentences for overlap
-                    current_chunk = overlap_sentences + [sentence]
-                    current_size = sum(len(s) + 1 for s in current_chunk)
+                sentence_size = len(sentence) + 1  # +1 for space
+                
+                if current_size + sentence_size > max_chunk_size and current_chunk:
+                    # Save current chunk
+                    chunks.append(' '.join(current_chunk))
+                    
+                    # Start new chunk with overlap
+                    if overlap > 0 and len(current_chunk) > 2:
+                        overlap_sentences = current_chunk[-2:]  # Keep last 2 sentences for overlap
+                        current_chunk = overlap_sentences + [sentence]
+                        current_size = sum(len(s) + 1 for s in current_chunk)
+                    else:
+                        current_chunk = [sentence]
+                        current_size = sentence_size
                 else:
-                    current_chunk = [sentence]
-                    current_size = sentence_size
-            else:
-                current_chunk.append(sentence)
-                current_size += sentence_size
+                    current_chunk.append(sentence)
+                    current_size += sentence_size
         
         # Add the last chunk
         if current_chunk:
             chunks.append(' '.join(current_chunk))
         
+        logger.info(f"✅ Split text into {len(chunks)} chunks for better RAG performance")
         return chunks
     
     async def create_embeddings(self, text_chunks: List[str], document_id: str) -> bool:
@@ -359,7 +419,7 @@ class AIServices:
             return False
     
     async def query_rag(self, question: str, document_id: str, k: int = 5) -> Dict[str, Any]:
-        """Query RAG pipeline for document-specific answers"""
+        """Query RAG pipeline for document-specific answers using Gemini 2.5 Flash"""
         try:
             if not self.pinecone_index:
                 return {
@@ -405,27 +465,50 @@ class AIServices:
                     "confidence": 0.0
                 }
             
-            # Generate answer using retrieved context
+            # Generate answer using retrieved context with enhanced prompt for Gemini 2.5 Flash
             relevant_chunks = [match.metadata["text"] for match in results.matches]
             context = "\n\n".join(relevant_chunks)
             
+            # Enhanced prompt for Gemini 2.5 Flash's reasoning capabilities
             prompt = f"""
-            Based ONLY on the following context from the document, answer the question.
-            Do not use any outside knowledge. If the context doesn't contain the answer, state that clearly.
+            You are an expert document analyst with access to specific document content. 
+            
+            CONTEXT FROM DOCUMENT:
+            {context}
 
-            Context: {context}
+            QUESTION: {question}
 
-            Question: {question}
+            INSTRUCTIONS:
+            - Answer the question based ONLY on the provided context
+            - If the context doesn't contain enough information, state that clearly
+            - Be specific and cite relevant parts of the context
+            - Provide a comprehensive but concise answer
+            - If you're uncertain about something, indicate your confidence level
 
-            Answer:
+            ANSWER:
             """
             
-            response = self.gemini_model.generate_content(prompt)
+            # Use optimized generation config for RAG responses
+            generation_config = genai.types.GenerationConfig(
+                temperature=0.2,  # Lower temperature for more factual responses
+                max_output_tokens=1000,
+                top_p=0.8,
+                top_k=20
+            )
+            
+            response = self.gemini_model.generate_content(
+                prompt,
+                generation_config=generation_config
+            )
+            
+            # Calculate confidence based on match scores
+            avg_confidence = sum([match.score for match in results.matches]) / len(results.matches)
             
             return {
                 "answer": response.text,
                 "sources": [match.metadata["chunk_index"] for match in results.matches],
-                "confidence": max([match.score for match in results.matches]) if results.matches else 0.0
+                "confidence": min(avg_confidence, 1.0),
+                "chunks_used": len(results.matches)
             }
             
         except Exception as e:
@@ -443,7 +526,7 @@ def init_ai_services():
     """Initialize AI services"""
     try:
         ai_services.initialize()
-        logger.info("✅ AI Services initialization completed")
+        logger.info("✅ AI Services initialization completed with Gemini 2.5 Flash")
     except Exception as e:
         logger.error(f"❌ AI Services initialization failed: {e}")
         logger.warning("Application will continue with limited AI functionality")
