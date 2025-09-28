@@ -4,12 +4,18 @@ import ChatClient from "./chat.client";
 
 export const dynamic = "force-dynamic";
 
-export default async function ChatPage({ params }: { params: { id: string } }) {
+export default async function ChatPage({ 
+  params 
+}: { 
+  params: Promise<{ id: string }> 
+}) {
   const session = await auth();
   
   if (!session) {
     redirect("/login");
   }
   
-  return <ChatClient docId={params.id} />;
+  const resolvedParams = await params;
+  
+  return <ChatClient docId={resolvedParams.id} />;
 }

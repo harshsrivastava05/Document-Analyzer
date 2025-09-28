@@ -33,7 +33,15 @@ async def ask_question(
                 raise HTTPException(status_code=404, detail="Document not found")
             
             # Get RAG response
-            rag_response = await ai_services.query_rag(request.question, request.docId)
+            try:
+                rag_response = await ai_services.query_rag(request.question, request.docId)
+            except Exception as e:
+                logger.error(f"RAG query failed: {e}")
+                rag_response = {
+                    "answer": "I apologize, but I'm unable to process your question at the moment. Please try again later.",
+                    "sources": [],
+                    "confidence": 0.0
+                }
             
             # Save user message
             user_chat_id = str(uuid.uuid4())
@@ -75,13 +83,25 @@ async def get_chat_history(
     userId: str = Query(None),
     user_id: str = Depends(get_current_user)
 ):
-    """Get chat history for a document"""
+    """Get chat history for a document with improved error handling"""
     try:
         # Use userId from query if provided, otherwise use authenticated user_id
         final_user_id = userId if userId else user_id
         
+        logger.info(f"Fetching chat history for document {docId} and user {final_user_id}")
+        
         with get_db_connection() as connection:
             cursor = connection.cursor(cursor_factory=RealDictCursor)
+            
+            # First verify the document exists and user has access
+            cursor.execute('''
+                SELECT id FROM "documents" 
+                WHERE id = %s AND user_id = %s
+            ''', (docId, final_user_id))
+            
+            if not cursor.fetchone():
+                logger.warning(f"Document {docId} not found for user {final_user_id}")
+                return {"messages": [], "error": "Document not found or access denied"}
             
             cursor.execute('''
                 SELECT id, role, content, created_at
@@ -91,6 +111,8 @@ async def get_chat_history(
             ''', (docId, final_user_id))
             
             messages = cursor.fetchall()
+            
+            logger.info(f"Found {len(messages)} messages for document {docId}")
             
             # Format messages for response
             formatted_messages = []

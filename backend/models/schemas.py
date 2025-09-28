@@ -1,8 +1,9 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
 
+# Original schemas (keeping for backward compatibility)
 class DocumentUpload(BaseModel):
     title: str
     mime_type: str
@@ -43,12 +44,52 @@ class DocumentAnalysis(BaseModel):
     sentiment: str
     confidence: float
 
-class UploadResponse(BaseModel):
-    success: bool
-    document: DocumentResponse
-    message: str
-
 class HealthCheck(BaseModel):
     status: str
     timestamp: datetime
     services: dict
+
+# New schemas for enhanced functionality
+class RedirectInfo(BaseModel):
+    url: str
+    delay: int = 2000  # Delay in milliseconds
+
+class UploadResponse(BaseModel):
+    success: bool
+    document: DocumentResponse
+    message: str
+    redirect: Optional[RedirectInfo] = None
+
+class ChatHistoryResponse(BaseModel):
+    messages: List[ChatResponse]
+    document_id: str
+
+class AskRequest(BaseModel):
+    docId: str
+    question: str
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: List[int] = []
+    confidence: float = 0.0
+    message_id: str
+
+class DocumentListResponse(BaseModel):
+    documents: List[DocumentResponse]
+    total: int
+
+class HealthResponse(BaseModel):
+    status: str
+    database: str
+    ai_services: Dict[str, str]
+    timestamp: datetime
+
+class DocumentStatus(BaseModel):
+    document_id: str
+    title: str
+    status: str  # 'processing', 'completed', 'failed'
+    summary: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    chat_ready: bool = False
+    redirect_url: Optional[str] = None
