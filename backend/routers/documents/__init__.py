@@ -1,11 +1,8 @@
 from fastapi import APIRouter
-from .list_docs import router as list_router
-from .view_doc import router as view_router
-from .delete_doc import router as delete_router
-from .upload import router as upload_router
+from . import list_docs, view_doc, delete_doc, upload
 
-router = APIRouter(prefix="/documents", tags=["Documents"])
-router.include_router(list_router)
-router.include_router(view_router)
-router.include_router(delete_router)
-router.include_router(upload_router)
+router = APIRouter()
+router.include_router(list_docs.router)
+router.include_router(view_doc.router)
+router.include_router(delete_doc.router)
+router.include_router(upload.router)

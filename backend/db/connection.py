@@ -6,6 +6,7 @@ import logging
 import threading
 from fastapi import HTTPException
 from urllib.parse import urlparse
+from psycopg2 import extensions
 
 logger = logging.getLogger(__name__)
 connection_pool = None

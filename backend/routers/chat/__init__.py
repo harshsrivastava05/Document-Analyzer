@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .query import router as query_router
+from . import query
 
-router = APIRouter(prefix="/chat", tags=["Chat"])
-router.include_router(query_router)
+router = APIRouter()
+router.include_router(query.router)

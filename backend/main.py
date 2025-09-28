@@ -1,3 +1,4 @@
+from http.client import HTTPException
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +26,7 @@ app.add_middleware(
 
 app.middleware("http")(log_requests_with_pool_monitoring)
 app.add_exception_handler(Exception, global_exception_handler)
-app.add_exception_handler(Exception, http_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
