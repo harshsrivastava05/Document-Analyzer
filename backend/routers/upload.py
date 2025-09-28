@@ -31,30 +31,56 @@ async def process_document_background(
         logger.info(f"🤖 Starting background processing for document {document_id}")
         
         # 1. Analyze document with Gemini AI
-        analysis_result = await ai_services.analyze_document(file_content, filename)
-        
-        # 2. Extract text and create embeddings
-        # For PDF/DOC files, try to decode as text, otherwise use summary
         try:
-            text_content = file_content.decode('utf-8', errors='ignore')
-        except:
-            text_content = analysis_result.get('summary', '')
+            analysis_result = await ai_services.analyze_document(file_content, filename)
+            logger.info(f"📊 AI analysis completed for document {document_id}")
+        except Exception as e:
+            logger.error(f"❌ AI analysis failed for document {document_id}: {e}")
+            analysis_result = {
+                "summary": "Document uploaded successfully but AI analysis is currently unavailable.",
+                "key_topics": [],
+                "entities": [],
+                "sentiment": "neutral",
+                "confidence": 0.0
+            }
         
-        if text_content:
-            text_chunks = ai_services.split_text(text_content)
-            await ai_services.create_embeddings(text_chunks, document_id)
+        # 2. Extract text and create embeddings for RAG
+        try:
+            # For PDF/DOC files, try to decode as text, otherwise use summary
+            try:
+                text_content = file_content.decode('utf-8', errors='ignore')
+                # Clean up the text content
+                text_content = text_content.strip()
+                if len(text_content) < 50:  # Too short, likely not meaningful text
+                    text_content = analysis_result.get('summary', '')
+            except:
+                text_content = analysis_result.get('summary', '')
+            
+            if text_content and len(text_content.strip()) > 50:
+                text_chunks = ai_services.split_text(text_content)
+                await ai_services.create_embeddings(text_chunks, document_id)
+                logger.info(f"🔍 Created embeddings for {len(text_chunks)} text chunks")
+            else:
+                logger.warning(f"⚠️ No meaningful text content found for embeddings in document {document_id}")
+                
+        except Exception as e:
+            logger.error(f"❌ Embedding creation failed for document {document_id}: {e}")
         
         # 3. Update document in database with analysis results
-        with get_db_connection() as connection:
-            cursor = connection.cursor(cursor_factory=RealDictCursor)
-            
-            cursor.execute('''
-                UPDATE "documents" 
-                SET summary = %s, updated_at = NOW()
-                WHERE id = %s AND user_id = %s
-            ''', (analysis_result.get('summary', 'Analysis completed'), document_id, user_id))
-            
-            connection.commit()
+        try:
+            with get_db_connection() as connection:
+                cursor = connection.cursor(cursor_factory=RealDictCursor)
+                
+                cursor.execute('''
+                    UPDATE "documents" 
+                    SET summary = %s, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                ''', (analysis_result.get('summary', 'Analysis completed'), document_id, user_id))
+                
+                connection.commit()
+                logger.info(f"📝 Document {document_id} updated with analysis results")
+        except Exception as e:
+            logger.error(f"❌ Failed to update document {document_id}: {e}")
         
         logger.info(f"✅ Background processing completed for document {document_id}")
         
@@ -172,7 +198,7 @@ async def upload_document(
         
         logger.info(f"✅ Document uploaded and queued for processing: {documentId}")
         
-        # Create response
+        # Create response with redirect information
         document_response = DocumentResponse(
             id=document['id'],
             title=document['title'],
@@ -187,7 +213,11 @@ async def upload_document(
         return UploadResponse(
             success=True,
             document=document_response,
-            message="Document uploaded and processing with AI..."
+            message="Document uploaded successfully and is being processed with AI",
+            redirect={
+                "url": f"/chat/{documentId}",
+                "delay": 2000  # 2 second delay for user to see success message
+            }
         )
         
     except HTTPException:
@@ -294,7 +324,7 @@ async def upload_document_direct(
         
         logger.info(f"✅ Document uploaded and queued for processing: {documentId}")
         
-        # Create response
+        # Create response with redirect information
         document_response = DocumentResponse(
             id=document['id'],
             title=document['title'],
@@ -309,7 +339,11 @@ async def upload_document_direct(
         return UploadResponse(
             success=True,
             document=document_response,
-            message="Document uploaded and processing with AI..."
+            message="Document uploaded successfully and is being processed with AI",
+            redirect={
+                "url": f"/chat/{documentId}",
+                "delay": 2000  # 2 second delay for user to see success message
+            }
         )
         
     except HTTPException:
@@ -354,7 +388,9 @@ async def get_upload_status(
                 "status": status,
                 "summary": summary,
                 "created_at": document['created_at'].isoformat() if document['created_at'] else None,
-                "updated_at": document['updated_at'].isoformat() if document['updated_at'] else None
+                "updated_at": document['updated_at'].isoformat() if document['updated_at'] else None,
+                "chat_ready": status == 'completed',  # Indicates if ready for chat
+                "redirect_url": f"/chat/{document['id']}" if status == 'completed' else None
             }
             
     except HTTPException:

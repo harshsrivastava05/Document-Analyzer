@@ -1,6 +1,7 @@
+// frontend/src/app/api/proxy/chat-history/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { proxy } from "@/lib/api";
 import { auth } from "@/lib/auth";
+import { createJWTForBackend } from "@/lib/jwt";
 
 export async function GET(req: NextRequest) {
   try {
@@ -12,9 +13,23 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const docId = searchParams.get("docId");
     
-    const res = await proxy(
-      `/chat-history?docId=${docId}&userId=${session.user.id}`
-    );
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const url = `${backendUrl}/api/chat-history?docId=${docId}&userId=${session.user.id}`;
+    
+    // Create JWT token for backend authentication
+    const jwtToken = createJWTForBackend(session.user.id);
+    
+    console.log('📡 Fetching chat history from:', url);
+    console.log('🔑 Using JWT token for user:', session.user.id);
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${jwtToken}`, // Add JWT token to Authorization header
+      },
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
 
     if (!res.ok) {
       console.error('Backend returned error:', res.status, res.statusText);
@@ -25,7 +40,9 @@ export async function GET(req: NextRequest) {
     }
 
     const data = await res.json();
+    console.log('✅ Chat history fetched successfully from backend');
     return NextResponse.json(data, { status: res.status });
+    
   } catch (error) {
     console.error('Chat history API error:', error);
     return NextResponse.json(

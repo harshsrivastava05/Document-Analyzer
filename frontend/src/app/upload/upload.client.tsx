@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 
 type UploadMode = 'gcs-direct' | 'backend-proxy';
@@ -10,6 +11,7 @@ export default function UploadClient() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [uploadMode, setUploadMode] = useState<UploadMode>('backend-proxy');
+  const router = useRouter();
 
   const handleUploadDirect = async () => {
     if (!file) return;
@@ -32,8 +34,12 @@ export default function UploadClient() {
       }
       
       const data = await res.json();
-      setStatus("File uploaded successfully and queued for analysis.");
-      resetForm();
+      setStatus("File uploaded successfully! Redirecting to chat...");
+      
+      // Wait a moment and then redirect to the chat page
+      setTimeout(() => {
+        router.push(`/chat/${data.document.id}`);
+      }, 2000);
       
     } catch (e: any) {
       setStatus(`Error: ${e.message}`);
@@ -47,7 +53,7 @@ export default function UploadClient() {
     
     try {
       setLoading(true);
-      setStatus("Uploading via backend...");
+      setStatus("Uploading via backend with AI processing...");
       
       const form = new FormData();
       form.append("file", file);
@@ -63,8 +69,12 @@ export default function UploadClient() {
       }
       
       const data = await res.json();
-      setStatus(`File uploaded successfully! ${data.message || 'Processing with AI...'}`);
-      resetForm();
+      setStatus(`File uploaded and processed successfully! Redirecting to chat...`);
+      
+      // Wait a moment to show success message, then redirect
+      setTimeout(() => {
+        router.push(`/chat/${data.document.id}`);
+      }, 2000);
       
     } catch (e: any) {
       setStatus(`Backend Error: ${e.message}`);
@@ -138,9 +148,10 @@ export default function UploadClient() {
             accept=".pdf,.doc,.docx,.txt"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-violet-600 file:px-4 file:py-2 file:text-white hover:file:bg-violet-500"
+            disabled={loading}
           />
           <Button onClick={handleUpload} disabled={!file || loading}>
-            {loading ? "Uploading..." : "Upload"}
+            {loading ? "Processing..." : "Upload"}
           </Button>
         </div>
         
@@ -148,13 +159,21 @@ export default function UploadClient() {
           <div className={`mt-4 p-3 rounded-lg text-sm ${
             status.includes('Error') || status.includes('error') 
               ? 'bg-red-900/20 text-red-400 border border-red-800' 
+              : status.includes('Redirecting')
+              ? 'bg-blue-900/20 text-blue-400 border border-blue-800'
               : 'bg-green-900/20 text-green-400 border border-green-800'
           }`}>
             {status}
+            {status.includes('Redirecting') && (
+              <div className="mt-2">
+                <div className="animate-spin inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full mr-2"></div>
+                Taking you to the chat page...
+              </div>
+            )}
           </div>
         )}
         
-        {file && (
+        {file && !loading && (
           <div className="mt-4 p-3 bg-gray-900/50 rounded-lg">
             <div className="text-sm text-gray-300">
               <strong>Selected:</strong> {file.name}
@@ -170,6 +189,17 @@ export default function UploadClient() {
           <ul className="text-xs text-blue-200 space-y-1">
             <li><strong>Backend Processing:</strong> Full AI analysis, embeddings, and RAG capabilities</li>
             <li><strong>Direct Upload:</strong> Faster upload, limited backend processing (if backend is down)</li>
+          </ul>
+        </div>
+
+        {/* Processing Information */}
+        <div className="mt-4 p-4 bg-violet-900/20 border border-violet-800 rounded-lg">
+          <h3 className="text-sm font-medium text-violet-400 mb-2">What happens after upload:</h3>
+          <ul className="text-xs text-violet-200 space-y-1">
+            <li>✨ AI analysis and summarization</li>
+            <li>🔍 Text extraction and embedding creation</li>
+            <li>💬 Ready for intelligent Q&A chat</li>
+            <li>📱 Automatic redirect to chat interface</li>
           </ul>
         </div>
       </div>

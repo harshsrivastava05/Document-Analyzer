@@ -1,17 +1,32 @@
+# Core FastAPI dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
-python-jose[cryptography]==3.3.0
+python-dotenv==1.0.0
+
+# Authentication & Security  
+PyJWT==2.8.0
 passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+
+# Database
 psycopg2-binary==2.9.9
+
+# AI Services
 google-generativeai==0.3.2
 pinecone-client==3.0.0
-google-cloud-storage==2.10.0
-pydantic==2.5.0
-python-dotenv==1.0.0
-aiofiles==23.2.1
-PyJWT==2.8.0
 pinecone[grpc]==3.0.0
-cohere==4.21
+cohere>=4.37  
 google-auth==2.23.4
-dotenv
+
+# Cloud Storage
+google-cloud-storage==2.10.0
+
+# Data Processing & Utils
+pydantic==2.5.0
+aiofiles==23.2.1
+
+# Document Processing (optional - add if you need text extraction)
+# python-magic==0.4.27
+# PyPDF2==3.0.1
+# python-docx==1.1.0

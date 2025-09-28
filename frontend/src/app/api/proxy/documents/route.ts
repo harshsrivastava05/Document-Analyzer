@@ -1,6 +1,7 @@
 // frontend/src/app/api/proxy/documents/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { createJWTForBackend } from "@/lib/jwt";
 
 export async function GET() {
   try {
@@ -12,7 +13,11 @@ export async function GET() {
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
     const url = `${backendUrl}/api/documents?userId=${session.user.id}`;
     
+    // Create JWT token for backend authentication
+    const jwtToken = createJWTForBackend(session.user.id);
+    
     console.log('📡 Fetching documents from:', url);
+    console.log('🔑 Using JWT token for user:', session.user.id);
 
     let res;
     try {
@@ -20,7 +25,7 @@ export async function GET() {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          // Add any auth headers if needed
+          'Authorization': `Bearer ${jwtToken}`, // Add JWT token to Authorization header
         },
         signal: AbortSignal.timeout(10000), // 10 second timeout
       });

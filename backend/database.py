@@ -1,3 +1,4 @@
+# backend/database.py (UPDATED VERSION)
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -6,6 +7,7 @@ from fastapi import HTTPException
 import logging
 from contextlib import contextmanager
 from urllib.parse import urlparse
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +32,7 @@ def parse_database_url(database_url: str) -> dict:
     }
 
 def init_connection_pool():
-    """Initialize connection pool for database"""
+    """Initialize connection pool for database with improved settings"""
     global connection_pool
     try:
         database_url = os.getenv("DATABASE_URL")
@@ -51,14 +53,17 @@ def init_connection_pool():
         
         connection_pool = ThreadedConnectionPool(
             minconn=1,
-            maxconn=20,
+            maxconn=10,  # Reduced from 20 for cloud databases
             **db_config,
-            # Connection timeout
-            connect_timeout=10,
-            # Keep connections alive
-            keepalives_idle=600,
+            # Improved connection settings for cloud databases
+            connect_timeout=30,  # Increased timeout
+            keepalives_idle=300,   # 5 minutes - reduced from 600
             keepalives_interval=30,
-            keepalives_count=3
+            keepalives_count=3,
+            # Additional settings for stability
+            application_name='document_analyzer_backend',
+            # Disable SSL compression for better compatibility
+            sslcompression=0 if db_config.get('sslmode') == 'require' else None
         )
         logger.info("✅ Database connection pool initialized")
         return True
@@ -66,71 +71,129 @@ def init_connection_pool():
         logger.error(f"❌ Failed to initialize connection pool: {e}")
         return False
 
+def test_connection(connection):
+    """Test if a connection is still alive"""
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        cursor.close()
+        return True
+    except Exception:
+        return False
+
 @contextmanager
 def get_db_connection():
-    """Get database connection from pool with context manager"""
+    """Get database connection from pool with context manager and retry logic"""
     if not connection_pool:
         if not init_connection_pool():
             raise HTTPException(status_code=500, detail="Database connection pool not available")
     
     connection = None
-    try:
-        connection = connection_pool.getconn()
-        if connection is None:
-            raise Exception("Failed to get connection from pool")
-        yield connection
-    except Exception as e:
-        logger.error(f"Database connection error: {str(e)}")
-        if connection:
-            connection.rollback()
-        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
-    finally:
+    retry_count = 0
+    max_retries = 3
+    
+    while retry_count < max_retries:
+        try:
+            connection = connection_pool.getconn()
+            if connection is None:
+                raise Exception("Failed to get connection from pool")
+            
+            # Test if connection is alive
+            if not test_connection(connection):
+                logger.warning("Dead connection detected, getting new one...")
+                connection_pool.putconn(connection, close=True)
+                connection = None
+                retry_count += 1
+                time.sleep(1)  # Brief pause before retry
+                continue
+                
+            yield connection
+            break
+            
+        except psycopg2.OperationalError as e:
+            logger.error(f"Database operational error (attempt {retry_count + 1}): {str(e)}")
+            if connection:
+                connection_pool.putconn(connection, close=True)
+                connection = None
+            
+            retry_count += 1
+            if retry_count >= max_retries:
+                raise HTTPException(status_code=500, detail=f"Database connection failed after {max_retries} attempts: {str(e)}")
+            
+            time.sleep(2 ** retry_count)  # Exponential backoff
+            
+        except Exception as e:
+            logger.error(f"Database connection error: {str(e)}")
+            if connection:
+                connection.rollback()
+                connection_pool.putconn(connection, close=True)
+                connection = None
+            raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+    else:
         if connection:
             connection_pool.putconn(connection)
 
 def get_db_connection_direct():
-    """Direct connection method for backwards compatibility"""
-    try:
-        database_url = os.getenv("DATABASE_URL")
-        if database_url:
-            db_config = parse_database_url(database_url)
-        else:
-            db_config = {
-                'host': os.getenv("NEON_HOST", "localhost"),
-                'database': os.getenv("NEON_DATABASE", "postgres"),
-                'user': os.getenv("NEON_USER", "postgres"),
-                'password': os.getenv("NEON_PASSWORD", ""),
-                'port': int(os.getenv("NEON_PORT", 5432)),
-                'sslmode': os.getenv("NEON_SSL_MODE", "require")
-            }
-        
-        connection = psycopg2.connect(
-            cursor_factory=RealDictCursor,
-            **db_config
-        )
-        return connection
-    except Exception as e:
-        logger.error(f"Database connection failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+    """Direct connection method with retry logic"""
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            database_url = os.getenv("DATABASE_URL")
+            if database_url:
+                db_config = parse_database_url(database_url)
+            else:
+                db_config = {
+                    'host': os.getenv("NEON_HOST", "localhost"),
+                    'database': os.getenv("NEON_DATABASE", "postgres"),
+                    'user': os.getenv("NEON_USER", "postgres"),
+                    'password': os.getenv("NEON_PASSWORD", ""),
+                    'port': int(os.getenv("NEON_PORT", 5432)),
+                    'sslmode': os.getenv("NEON_SSL_MODE", "require")
+                }
+            
+            connection = psycopg2.connect(
+                cursor_factory=RealDictCursor,
+                connect_timeout=30,
+                **db_config
+            )
+            return connection
+            
+        except psycopg2.OperationalError as e:
+            logger.error(f"Direct connection failed (attempt {retry_count + 1}): {str(e)}")
+            retry_count += 1
+            if retry_count >= max_retries:
+                raise HTTPException(status_code=500, detail=f"Database connection failed after {max_retries} attempts: {str(e)}")
+            time.sleep(2 ** retry_count)
+        except Exception as e:
+            logger.error(f"Database connection failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
 def check_tables_exist():
     """Check if database tables already exist"""
-    with get_db_connection() as connection:
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            cursor = connection.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("""
-                SELECT COUNT(*) as count
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name IN ('users', 'accounts', 'sessions', 'documents', 'qnas', 'verification_tokens')
-            """)
-            result = cursor.fetchone()
-            table_count = result['count'] if result else 0
-            # We expect 6 tables in total
-            return table_count == 6
+            with get_db_connection() as connection:
+                cursor = connection.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT COUNT(*) as count
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name IN ('users', 'accounts', 'sessions', 'documents', 'qnas', 'verification_tokens')
+                """)
+                result = cursor.fetchone()
+                table_count = result['count'] if result else 0
+                # We expect 6 tables in total
+                return table_count == 6
         except Exception as e:
-            logger.error(f"Failed to check existing tables: {e}")
-            return False
+            logger.error(f"Failed to check existing tables (attempt {attempt + 1}): {e}")
+            if attempt == max_retries - 1:
+                return False
+            time.sleep(2 ** attempt)
+    return False
 
 def create_tables_if_not_exist():
     """Create database tables only if they don't already exist"""
@@ -311,69 +374,31 @@ def init_db():
         logger.error(f"❌ Database initialization failed: {e}")
         raise
 
-def drop_existing_tables():
-    """Drop existing tables and all related objects to avoid conflicts - USE WITH CAUTION"""
-    logger.warning("⚠️ WARNING: Dropping all database tables. This will delete all data!")
-    with get_db_connection() as connection:
-        try:
-            cursor = connection.cursor(cursor_factory=RealDictCursor)
-            
-            # Drop tables first - this will automatically drop all their constraints, indexes, and triggers
-            # Drop in reverse order of dependencies
-            tables_to_drop = [
-                'qnas',
-                'documents', 
-                'sessions',
-                'accounts',
-                'verification_tokens',
-                'users'
-            ]
-            
-            for table in tables_to_drop:
-                try:
-                    cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
-                    logger.info(f"✅ Dropped table {table} if it existed")
-                except Exception as e:
-                    logger.warning(f"⚠️ Could not drop table {table}: {e}")
-                    # If a table drop fails, rollback and try the next one in a new transaction
-                    connection.rollback()
-            
-            # Drop any remaining functions
-            try:
-                cursor.execute('DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE')
-                logger.info("✅ Dropped function update_updated_at_column if it existed")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not drop function: {e}")
-                connection.rollback()
-            
-            connection.commit()
-            logger.info("✅ All database objects cleaned up successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to drop existing tables: {e}")
-            connection.rollback()
-            raise
-
 def test_db_connection():
     """Test database connection and basic operations"""
-    try:
-        with get_db_connection() as connection:
-            cursor = connection.cursor(cursor_factory=RealDictCursor)
-            
-            # Test basic query
-            cursor.execute("SELECT 1 as test")
-            result = cursor.fetchone()
-            
-            if result and result['test'] == 1:
-                logger.info("✅ Database connection test passed")
-                return True
-            else:
-                logger.error("❌ Database connection test failed")
-                return False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            with get_db_connection() as connection:
+                cursor = connection.cursor(cursor_factory=RealDictCursor)
                 
-    except Exception as e:
-        logger.error(f"❌ Database connection test failed: {e}")
-        return False
+                # Test basic query
+                cursor.execute("SELECT 1 as test")
+                result = cursor.fetchone()
+                
+                if result and result['test'] == 1:
+                    logger.info("✅ Database connection test passed")
+                    return True
+                else:
+                    logger.error("❌ Database connection test failed")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"❌ Database connection test failed (attempt {attempt + 1}): {e}")
+            if attempt == max_retries - 1:
+                return False
+            time.sleep(2 ** attempt)
+    return False
 
 def get_db_stats():
     """Get database statistics for monitoring"""
@@ -412,22 +437,17 @@ def get_db_stats():
         logger.error(f"Failed to get database stats: {e}")
         return {}
 
-def reset_database():
-    """Completely reset the database - USE WITH CAUTION - This will delete all data!"""
+# Cleanup function for graceful shutdown
+def cleanup_connection_pool():
+    """Clean up connection pool on shutdown"""
+    global connection_pool
     try:
-        confirm = input("⚠️ WARNING: This will delete ALL data. Type 'RESET' to confirm: ")
-        if confirm != "RESET":
-            logger.info("Database reset cancelled")
-            return False
-            
-        logger.info("🔄 Resetting database...")
-        drop_existing_tables()
-        create_tables_if_not_exist()
-        logger.info("✅ Database reset complete")
-        return True
+        if connection_pool:
+            connection_pool.closeall()
+            connection_pool = None
+            logger.info("✅ Connection pool cleaned up")
     except Exception as e:
-        logger.error(f"❌ Database reset failed: {e}")
-        return False
+        logger.error(f"Error cleaning up connection pool: {e}")
 
 # Initialize connection pool on module import
 if not connection_pool:
