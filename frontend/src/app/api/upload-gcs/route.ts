@@ -4,6 +4,9 @@ import { auth } from "@/lib/auth";
 import { uploadFileToGCS } from "@/lib/gcs";
 import { prisma } from "@/lib/prisma";
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
     const session = await auth();
