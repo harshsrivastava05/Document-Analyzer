@@ -4,6 +4,9 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { createJWTForBackend } from "@/lib/jwt";
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
