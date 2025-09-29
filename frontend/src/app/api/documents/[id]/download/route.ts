@@ -6,15 +6,15 @@ import { createJWTForBackend } from "@/lib/jwt";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth();
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const params1 = await params;
-    const documentId = params1.id;
+    const resolved = await context.params;
+    const documentId = resolved.id;
 
     // Get document from database
     const document = await prisma.document.findFirst({
