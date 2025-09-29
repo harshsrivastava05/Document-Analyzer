@@ -1,4 +1,4 @@
-# backend/database.py (UPDATED VERSION)
+# backend/database.py (CORRECTED VERSION)
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -28,16 +28,16 @@ def parse_database_url(database_url: str) -> dict:
         'database': parsed.path[1:],  # Remove leading '/'
         'user': parsed.username,
         'password': parsed.password,
-        'sslmode': 'require'  # Default for cloud databases
+        'sslmode': 'require'  # Required for Neon and most cloud databases
     }
-    
+
 def init_connection_pool():
-    """Initialize connection pool for database with improved settings"""
+    """Initialize connection pool for database with cloud-optimized settings"""
     global connection_pool
     try:
         database_url = os.getenv("DATABASE_URL")
         if not database_url:
-            # Fallback to individual environment variables for backward compatibility
+            # Fallback to individual environment variables
             db_config = {
                 'host': os.getenv("NEON_HOST", "localhost"),
                 'database': os.getenv("NEON_DATABASE", "postgres"),
@@ -51,33 +51,38 @@ def init_connection_pool():
             db_config = parse_database_url(database_url)
             logger.info(f"Using DATABASE_URL for connection to {db_config['host']}")
         
-        # Close existing pool if it exists
-        if connection_pool:
-            try:
-                connection_pool.closeall()
-            except:
-                pass
-        
+        # Cloud database optimized connection pool settings
         connection_pool = ThreadedConnectionPool(
-            minconn=2,     # Minimum connections
-            maxconn=8,     # Reduced max connections to prevent exhaustion
+            minconn=1,  # Minimum connections
+            maxconn=5,  # Maximum connections (reduced for cloud databases)
             **db_config,
-            # Improved connection settings for cloud databases
-            connect_timeout=30,  # Increased timeout
-            keepalives_idle=300,   # 5 minutes 
-            keepalives_interval=30,
+            # Connection timeout settings
+            connect_timeout=60,  # Increased to 60 seconds for cold starts
+            # Keepalive settings for idle connections
+            keepalives=1,
+            keepalives_idle=30,  # Reduced to 30 seconds
+            keepalives_interval=10,
             keepalives_count=3,
-            # Additional settings for stability
+            # Application identification
             application_name='document_analyzer_backend',
-            # Disable SSL compression for better compatibility
-            sslcompression=0 if db_config.get('sslmode') == 'require' else None,
-            # Connection lifetime settings
-            options='-c statement_timeout=30s -c idle_in_transaction_session_timeout=60s'
         )
-        logger.info("✅ Database connection pool initialized with improved settings")
+        
+        # Verify connection pool works
+        test_conn = connection_pool.getconn()
+        if test_conn:
+            cursor = test_conn.cursor()
+            cursor.execute("SELECT version();")
+            version = cursor.fetchone()
+            logger.info(f"✅ Database connected: {version[0][:50]}...")
+            cursor.close()
+            connection_pool.putconn(test_conn)
+        
+        logger.info("✅ Database connection pool initialized")
         return True
+        
     except Exception as e:
         logger.error(f"❌ Failed to initialize connection pool: {e}")
+        connection_pool = None
         return False
 
 def test_connection(connection):
@@ -94,9 +99,11 @@ def test_connection(connection):
 @contextmanager
 def get_db_connection():
     """Get database connection from pool with context manager and retry logic"""
+    global connection_pool
+    
     if not connection_pool:
         if not init_connection_pool():
-            raise HTTPException(status_code=500, detail="Database connection pool not available")
+            raise HTTPException(status_code=503, detail="Database service unavailable")
     
     connection = None
     retry_count = 0
@@ -111,74 +118,77 @@ def get_db_connection():
             # Test if connection is alive
             if not test_connection(connection):
                 logger.warning("Dead connection detected, getting new one...")
-                connection_pool.putconn(connection, close=True)
+                try:
+                    connection_pool.putconn(connection, close=True)
+                except:
+                    pass
                 connection = None
                 retry_count += 1
-                time.sleep(1)  # Brief pause before retry
+                time.sleep(1)
                 continue
-                
+            
+            # Set statement timeout to prevent long-running queries
+            cursor = connection.cursor()
+            cursor.execute("SET statement_timeout = '30s'")
+            cursor.close()
+            
             yield connection
+            connection.commit()
             break
             
         except psycopg2.OperationalError as e:
-            logger.error(f"Database operational error (attempt {retry_count + 1}): {str(e)}")
+            logger.error(f"Database operational error (attempt {retry_count + 1}/{max_retries}): {str(e)}")
             if connection:
-                connection_pool.putconn(connection, close=True)
+                try:
+                    connection_pool.putconn(connection, close=True)
+                except:
+                    pass
                 connection = None
             
             retry_count += 1
             if retry_count >= max_retries:
-                raise HTTPException(status_code=500, detail=f"Database connection failed after {max_retries} attempts: {str(e)}")
+                # Reinitialize pool on final failure
+                if connection_pool:
+                    try:
+                        connection_pool.closeall()
+                    except:
+                        pass
+                    connection_pool = None
+                raise HTTPException(
+                    status_code=503, 
+                    detail=f"Database connection failed after {max_retries} attempts"
+                )
             
-            time.sleep(2 ** retry_count)  # Exponential backoff
+            time.sleep(min(2 ** retry_count, 10))  # Exponential backoff with cap
+            
+        except psycopg2.InterfaceError as e:
+            logger.error(f"Database interface error: {str(e)}")
+            if connection:
+                try:
+                    connection_pool.putconn(connection, close=True)
+                except:
+                    pass
+                connection = None
+            raise HTTPException(status_code=500, detail="Database interface error")
             
         except Exception as e:
             logger.error(f"Database connection error: {str(e)}")
             if connection:
-                connection.rollback()
-                connection_pool.putconn(connection, close=True)
+                try:
+                    connection.rollback()
+                    connection_pool.putconn(connection, close=True)
+                except:
+                    pass
                 connection = None
-            raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
-    else:
-        if connection:
-            connection_pool.putconn(connection)
-
-def get_db_connection_direct():
-    """Direct connection method with retry logic"""
-    max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            database_url = os.getenv("DATABASE_URL")
-            if database_url:
-                db_config = parse_database_url(database_url)
-            else:
-                db_config = {
-                    'host': os.getenv("NEON_HOST", "localhost"),
-                    'database': os.getenv("NEON_DATABASE", "postgres"),
-                    'user': os.getenv("NEON_USER", "postgres"),
-                    'password': os.getenv("NEON_PASSWORD", ""),
-                    'port': int(os.getenv("NEON_PORT", 5432)),
-                    'sslmode': os.getenv("NEON_SSL_MODE", "require")
-                }
-            
-            connection = psycopg2.connect(
-                cursor_factory=RealDictCursor,
-                connect_timeout=30,
-                **db_config
-            )
-            return connection
-            
-        except psycopg2.OperationalError as e:
-            logger.error(f"Direct connection failed (attempt {retry_count + 1}): {str(e)}")
-            retry_count += 1
-            if retry_count >= max_retries:
-                raise HTTPException(status_code=500, detail=f"Database connection failed after {max_retries} attempts: {str(e)}")
-            time.sleep(2 ** retry_count)
-        except Exception as e:
-            logger.error(f"Database connection failed: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        
+        finally:
+            # Ensure connection is always returned to pool
+            if connection and retry_count < max_retries:
+                try:
+                    connection_pool.putconn(connection)
+                except:
+                    logger.error("Failed to return connection to pool")
 
 def check_tables_exist():
     """Check if database tables already exist"""
@@ -194,11 +204,15 @@ def check_tables_exist():
                     AND table_name IN ('users', 'accounts', 'sessions', 'documents', 'qnas', 'verification_tokens')
                 """)
                 result = cursor.fetchone()
+                cursor.close()
                 table_count = result['count'] if result else 0
-                # We expect 6 tables in total
                 return table_count == 6
+                
+        except HTTPException:
+            # Re-raise HTTP exceptions
+            raise
         except Exception as e:
-            logger.error(f"Failed to check existing tables (attempt {attempt + 1}): {e}")
+            logger.error(f"Failed to check existing tables (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
                 return False
             time.sleep(2 ** attempt)
@@ -208,11 +222,11 @@ def create_tables_if_not_exist():
     """Create database tables only if they don't already exist"""
     try:
         with get_db_connection() as connection:
-            cursor = connection.cursor(cursor_factory=RealDictCursor)
+            cursor = connection.cursor()
             
-            # Create users table if it doesn't exist
+            # Create users table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS "users" (
+                CREATE TABLE IF NOT EXISTS users (
                     id TEXT NOT NULL PRIMARY KEY,
                     name TEXT,
                     email TEXT UNIQUE,
@@ -223,16 +237,14 @@ def create_tables_if_not_exist():
                 )
             ''')
             
-            # Create index on email if it doesn't exist
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "users_email_idx" ON "users"("email")
-            ''')
+            # Create index on email
+            cursor.execute('CREATE INDEX IF NOT EXISTS users_email_idx ON users(email)')
             
-            # Create accounts table if it doesn't exist
+            # Create accounts table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS "accounts" (
+                CREATE TABLE IF NOT EXISTS accounts (
                     id TEXT NOT NULL PRIMARY KEY,
-                    user_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     type TEXT NOT NULL,
                     provider TEXT NOT NULL,
                     provider_account_id TEXT NOT NULL,
@@ -243,47 +255,39 @@ def create_tables_if_not_exist():
                     scope TEXT,
                     id_token TEXT,
                     session_state TEXT,
-                    CONSTRAINT accounts_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    CONSTRAINT accounts_provider_provider_account_id_key UNIQUE (provider, provider_account_id)
+                    UNIQUE(provider, provider_account_id)
                 )
             ''')
             
-            # Create index for accounts if it doesn't exist
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "accounts_user_id_idx" ON "accounts"("user_id")
-            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS accounts_user_id_idx ON accounts(user_id)')
             
-            # Create sessions table if it doesn't exist
+            # Create sessions table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS "sessions" (
+                CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT NOT NULL PRIMARY KEY,
                     session_token TEXT NOT NULL UNIQUE,
-                    user_id TEXT NOT NULL,
-                    expires TIMESTAMPTZ NOT NULL,
-                    CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    expires TIMESTAMPTZ NOT NULL
                 )
             ''')
             
-            # Create indexes for sessions if they don't exist
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "sessions_user_id_idx" ON "sessions"("user_id")
-            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id)')
             
-            # Create verification_tokens table if it doesn't exist
+            # Create verification_tokens table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS "verification_tokens" (
+                CREATE TABLE IF NOT EXISTS verification_tokens (
                     identifier TEXT NOT NULL,
                     token TEXT NOT NULL,
                     expires TIMESTAMPTZ NOT NULL,
-                    CONSTRAINT verification_tokens_identifier_token_key UNIQUE (identifier, token)
+                    UNIQUE(identifier, token)
                 )
             ''')
             
-            # Create documents table if it doesn't exist
+            # Create documents table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS "documents" (
+                CREATE TABLE IF NOT EXISTS documents (
                     id TEXT NOT NULL PRIMARY KEY,
-                    user_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     title TEXT,
                     gcs_file_id TEXT NOT NULL,
                     gcs_file_path TEXT,
@@ -291,45 +295,29 @@ def create_tables_if_not_exist():
                     file_size INTEGER,
                     summary TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    CONSTRAINT documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ''')
             
-            # Create indexes for documents if they don't exist
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "documents_user_id_idx" ON "documents"("user_id")
-            ''')
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "documents_gcs_file_id_idx" ON "documents"("gcs_file_id")
-            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS documents_user_id_idx ON documents(user_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS documents_gcs_file_id_idx ON documents(gcs_file_id)')
             
-            # Create qnas table if it doesn't exist (equivalent to chat_history)
+            # Create qnas table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS "qnas" (
+                CREATE TABLE IF NOT EXISTS qnas (
                     id TEXT NOT NULL PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    document_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    CONSTRAINT qnas_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
-                    CONSTRAINT qnas_document_id_fkey FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE ON UPDATE CASCADE
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ''')
             
-            # Create indexes for qnas if they don't exist
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "qnas_user_id_document_id_idx" ON "qnas"("user_id", "document_id")
-            ''')
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "qnas_user_id_idx" ON "qnas"("user_id")
-            ''')
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS "qnas_document_id_idx" ON "qnas"("document_id")
-            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS qnas_user_id_document_id_idx ON qnas(user_id, document_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS qnas_document_id_idx ON qnas(document_id)')
             
-            # Create function to automatically update updated_at if it doesn't exist
+            # Create update function for updated_at
             cursor.execute('''
                 CREATE OR REPLACE FUNCTION update_updated_at_column()
                 RETURNS TRIGGER AS $$
@@ -337,46 +325,42 @@ def create_tables_if_not_exist():
                     NEW.updated_at = NOW();
                     RETURN NEW;
                 END;
-                $$ language 'plpgsql';
+                $$ LANGUAGE plpgsql;
             ''')
             
-            # Create triggers for updated_at if they don't exist
+            # Create triggers for updated_at
             cursor.execute('''
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_users_updated_at') THEN
-                        CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON "users"
-                        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-                    END IF;
-                END$$;
+                DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+                CREATE TRIGGER update_users_updated_at 
+                    BEFORE UPDATE ON users
+                    FOR EACH ROW 
+                    EXECUTE FUNCTION update_updated_at_column();
             ''')
             
             cursor.execute('''
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_documents_updated_at') THEN
-                        CREATE TRIGGER update_documents_updated_at BEFORE UPDATE ON "documents"
-                        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-                    END IF;
-                END$$;
+                DROP TRIGGER IF EXISTS update_documents_updated_at ON documents;
+                CREATE TRIGGER update_documents_updated_at 
+                    BEFORE UPDATE ON documents
+                    FOR EACH ROW 
+                    EXECUTE FUNCTION update_updated_at_column();
             ''')
             
+            cursor.close()
             connection.commit()
             logger.info("✅ Database tables verified/created successfully")
             
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
+        logger.error(f"❌ Database table creation failed: {e}")
         raise
 
 def init_db():
-    """Initialize database tables only if they don't exist - preserves existing data"""
+    """Initialize database tables only if they don't exist"""
     try:
-        # Check if tables already exist
         if check_tables_exist():
-            logger.info("✅ Database tables already exist, skipping initialization to preserve data")
+            logger.info("✅ Database tables already exist, skipping initialization")
             return
         
-        logger.info("🏗️ Creating new database schema...")
+        logger.info("🏗️ Creating database schema...")
         create_tables_if_not_exist()
         
     except Exception as e:
@@ -390,20 +374,21 @@ def test_db_connection():
         try:
             with get_db_connection() as connection:
                 cursor = connection.cursor(cursor_factory=RealDictCursor)
-                
-                # Test basic query
-                cursor.execute("SELECT 1 as test")
+                cursor.execute("SELECT 1 as test, NOW() as timestamp")
                 result = cursor.fetchone()
+                cursor.close()
                 
                 if result and result['test'] == 1:
-                    logger.info("✅ Database connection test passed")
+                    logger.info(f"✅ Database connection test passed - Server time: {result['timestamp']}")
                     return True
                 else:
                     logger.error("❌ Database connection test failed")
                     return False
                     
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error(f"❌ Database connection test failed (attempt {attempt + 1}): {e}")
+            logger.error(f"❌ Database connection test failed (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
                 return False
             time.sleep(2 ** attempt)
@@ -414,14 +399,13 @@ def get_db_stats():
     try:
         with get_db_connection() as connection:
             cursor = connection.cursor(cursor_factory=RealDictCursor)
-            
             stats = {}
             
             # Get table counts
             tables = ['users', 'documents', 'qnas', 'accounts', 'sessions']
             for table in tables:
                 try:
-                    cursor.execute(f'SELECT COUNT(*) as count FROM "{table}"')
+                    cursor.execute(f'SELECT COUNT(*) as count FROM {table}')
                     count = cursor.fetchone()['count']
                     stats[f"{table}_count"] = count
                 except Exception as e:
@@ -430,23 +414,20 @@ def get_db_stats():
             
             # Get database size
             try:
-                cursor.execute('''
-                    SELECT pg_size_pretty(pg_database_size(current_database())) as db_size
-                ''')
-                
+                cursor.execute('SELECT pg_size_pretty(pg_database_size(current_database())) as db_size')
                 result = cursor.fetchone()
                 stats['database_size'] = result['db_size'] if result else '0 bytes'
             except Exception as e:
                 logger.warning(f"Could not get database size: {e}")
                 stats['database_size'] = 'unknown'
             
+            cursor.close()
             return stats
             
     except Exception as e:
         logger.error(f"Failed to get database stats: {e}")
         return {}
 
-# Cleanup function for graceful shutdown
 def cleanup_connection_pool():
     """Clean up connection pool on shutdown"""
     global connection_pool

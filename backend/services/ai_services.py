@@ -8,6 +8,12 @@ from typing import List, Dict, Any
 import tempfile
 import logging
 import PyPDF2
+try:
+    # Fallback PDF extraction if PyPDF2 returns little or no text
+    from pdfminer.high_level import extract_text as pdfminer_extract_text  # type: ignore
+    PDFMINER_AVAILABLE = True
+except Exception:
+    PDFMINER_AVAILABLE = False
 import io
 from docx import Document as DocxDocument
 
@@ -91,10 +97,28 @@ class AIServices:
                     pdf_reader = PyPDF2.PdfReader(pdf_file)
                     text = ""
                     for page in pdf_reader.pages:
-                        text += page.extract_text() + "\n"
+                        try:
+                            page_text = page.extract_text() or ""
+                        except Exception:
+                            page_text = ""
+                        text += page_text + "\n"
+                    # If PyPDF2 couldn't extract much, try pdfminer as a fallback
+                    if PDFMINER_AVAILABLE and len(text.strip()) < 50:
+                        try:
+                            tmp = io.BytesIO(file_content)
+                            text = pdfminer_extract_text(tmp)
+                        except Exception as e2:
+                            logger.warning(f"pdfminer fallback failed: {e2}")
                     return text
                 except Exception as e:
                     logger.warning(f"Failed to extract PDF text: {e}")
+                    # Try pdfminer as a last resort
+                    if PDFMINER_AVAILABLE:
+                        try:
+                            tmp = io.BytesIO(file_content)
+                            return pdfminer_extract_text(tmp)
+                        except Exception as e2:
+                            logger.warning(f"pdfminer last-resort failed: {e2}")
                     return ""
             
             elif file_extension in ['.docx']:

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from services.auth_service import get_current_user
 from services.ai_services import ai_services
+from services.gcs_service import gcs_service
 from database import get_db_connection
 from models.schemas import ChatRequest, ChatResponse, ChatMessage
 from psycopg2.extras import RealDictCursor
@@ -42,6 +43,51 @@ async def ask_question(
                     "sources": [],
                     "confidence": 0.0
                 }
+
+            # Fallback: if no vectors matched, try extracting text now and answering directly
+            if not rag_response.get("sources") and rag_response.get("confidence", 0.0) == 0.0:
+                try:
+                    # Get document metadata
+                    cursor.execute('''
+                        SELECT gcs_file_id, title, mime_type 
+                        FROM "documents" 
+                        WHERE id = %s AND user_id = %s
+                    ''', (request.docId, user_id))
+                    doc_row = cursor.fetchone()
+                    if doc_row:
+                        file_bytes = gcs_service.download_file(doc_row['gcs_file_id'], user_id)
+                        extracted_text = ai_services.extract_text_from_file(file_bytes, doc_row['title'] or 'document')
+                        if extracted_text and len(extracted_text.strip()) >= 50:
+                            # Create embeddings on-the-fly for future queries
+                            try:
+                                chunks = ai_services.split_text(extracted_text)
+                                await ai_services.create_embeddings(chunks, request.docId)
+                            except Exception as embed_err:
+                                logger.warning(f"On-demand embedding creation failed: {embed_err}")
+
+                            # Answer directly using Gemini constrained to extracted text
+                            limited_context = extracted_text[:30000]
+                            prompt = f"""
+                            Based ONLY on the following extracted text from the user's document, answer the question. 
+                            If the text doesn't contain the answer, say so explicitly.
+
+                            Text:\n{limited_context}
+
+                            Question: {request.question}
+                            """
+                            try:
+                                response = ai_services.gemini_model.generate_content(prompt)
+                                direct_answer = response.text
+                                if direct_answer:
+                                    rag_response = {
+                                        "answer": direct_answer,
+                                        "sources": [],
+                                        "confidence": 0.5
+                                    }
+                            except Exception as gen_err:
+                                logger.warning(f"Direct LLM answer failed: {gen_err}")
+                except Exception as fb_err:
+                    logger.warning(f"Fallback processing failed: {fb_err}")
             
             # Save user message
             user_chat_id = str(uuid.uuid4())

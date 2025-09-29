@@ -46,20 +46,20 @@ async def process_document_background(
         
         # 2. Extract text and create embeddings for RAG
         try:
-            # For PDF/DOC files, try to decode as text, otherwise use summary
-            try:
-                text_content = file_content.decode('utf-8', errors='ignore')
-                # Clean up the text content
-                text_content = text_content.strip()
-                if len(text_content) < 50:  # Too short, likely not meaningful text
-                    text_content = analysis_result.get('summary', '')
-            except:
-                text_content = analysis_result.get('summary', '')
-            
-            if text_content and len(text_content.strip()) > 50:
-                text_chunks = ai_services.split_text(text_content)
-                await ai_services.create_embeddings(text_chunks, document_id)
-                logger.info(f"🔍 Created embeddings for {len(text_chunks)} text chunks")
+            # Use robust extractor for PDFs/DOCX/TXT
+            extracted_text = ai_services.extract_text_from_file(file_content, filename)
+            extracted_text = (extracted_text or "").strip()
+
+            # Fallback to analysis summary only if no extractable text
+            text_for_embedding = extracted_text if len(extracted_text) >= 20 else analysis_result.get('summary', '')
+
+            if text_for_embedding and len(text_for_embedding.strip()) >= 20:
+                text_chunks = ai_services.split_text(text_for_embedding)
+                created = await ai_services.create_embeddings(text_chunks, document_id)
+                if created:
+                    logger.info(f"🔍 Created embeddings for {len(text_chunks)} text chunks")
+                else:
+                    logger.warning(f"⚠️ Embedding creation returned False for document {document_id}")
             else:
                 logger.warning(f"⚠️ No meaningful text content found for embeddings in document {document_id}")
                 
