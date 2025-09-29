@@ -30,7 +30,7 @@ def parse_database_url(database_url: str) -> dict:
         'password': parsed.password,
         'sslmode': 'require'  # Default for cloud databases
     }
-
+    
 def init_connection_pool():
     """Initialize connection pool for database with improved settings"""
     global connection_pool
@@ -51,21 +51,30 @@ def init_connection_pool():
             db_config = parse_database_url(database_url)
             logger.info(f"Using DATABASE_URL for connection to {db_config['host']}")
         
+        # Close existing pool if it exists
+        if connection_pool:
+            try:
+                connection_pool.closeall()
+            except:
+                pass
+        
         connection_pool = ThreadedConnectionPool(
-            minconn=1,
-            maxconn=10,  # Reduced from 20 for cloud databases
+            minconn=2,     # Minimum connections
+            maxconn=8,     # Reduced max connections to prevent exhaustion
             **db_config,
             # Improved connection settings for cloud databases
             connect_timeout=30,  # Increased timeout
-            keepalives_idle=300,   # 5 minutes - reduced from 600
+            keepalives_idle=300,   # 5 minutes 
             keepalives_interval=30,
             keepalives_count=3,
             # Additional settings for stability
             application_name='document_analyzer_backend',
             # Disable SSL compression for better compatibility
-            sslcompression=0 if db_config.get('sslmode') == 'require' else None
+            sslcompression=0 if db_config.get('sslmode') == 'require' else None,
+            # Connection lifetime settings
+            options='-c statement_timeout=30s -c idle_in_transaction_session_timeout=60s'
         )
-        logger.info("✅ Database connection pool initialized")
+        logger.info("✅ Database connection pool initialized with improved settings")
         return True
     except Exception as e:
         logger.error(f"❌ Failed to initialize connection pool: {e}")
