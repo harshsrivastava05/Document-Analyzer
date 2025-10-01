@@ -18,7 +18,7 @@
 
 ### 📄 **Smart Document Processing**
 - **Multi-format Support**: PDF, DOCX, TXT files
-- **Google Drive Integration**: Automatic cloud storage and sync
+- **Google Cloud Storage Integration**: Automatic cloud storage and sync
 - **Gemini 2.5 Flash**: Advanced AI-powered document analysis
 - **Intelligent Insights**: Summary generation, sentiment analysis, entity extraction
 
