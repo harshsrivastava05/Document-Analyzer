@@ -1,5 +1,7 @@
 # 🧠 DocAnalyzer AI - Intelligent Document Processing Platform
 
+**The deployed version of this website is discontinued as I have deleted the API keys for LLMs.**
+
 [![Next.js](https://img.shields.io/badge/Next.js-14.0-black?logo=next.js)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)](https://typescriptlang.org/)
